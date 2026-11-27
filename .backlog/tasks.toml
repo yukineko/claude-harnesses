@@ -550,34 +550,3 @@ exit 101: ompiling blastguard v0.2.951 (/Users/yuki/src/.harness-worktrees/sessi
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
      Running tests/heredoc_script_failopen_red_20261108.rs (target/debug/deps/heredoc_script_failopen_red_20261108-609b142a267ca92c)
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
-
-[[task]]
-id = "776fb89e"
-title = "backlog fail on an already-failed task is a silent no-op that prints a stale defer_until as '2 日後に再実行されます'; ruling-pending items are re-handed immediately"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-27 (main 3dc21b1b9, flow session eaa077f4): 987e3708 status=failed defer_until=1795414532 (11-23, past); next --claim handed it out; backlog fail printed 'deferred until 2026-11-23 06:15 UTC (2 日後に再実行されます)'; store diff empty. Cause read from source: store.rs mark_failed returns Ok(()) when status==failed ('idempotent no-op'), main.rs Command::Fail then prints the stored (elapsed) defer_until. RED by independent author at 3fa6e211b."
-created_at = 1795789802
-updated_at = 1795789802
-weight = 0.0
-issue_number = 1995
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1995"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261127_refail_does_not_refresh_defer -- --ignored"
-rev = "3fa6e211bba4420259d9050df3dcc0102ebb9798"
-observed_at = 1795789802
-detail = """
-exit 101: .166 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.63s
-     Running tests/backlog_20261127_refail_does_not_refresh_defer.rs (target/debug/deps/backlog_20261127_refail_does_not_refresh_defer-3bfdbe46b10c44f4)
-error: test failed, to rerun pass `-p backlog --test backlog_20261127_refail_does_not_refresh_defer`"""

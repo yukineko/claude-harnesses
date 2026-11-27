@@ -37,7 +37,6 @@ fn set_defer(f: &Fixture, id: &str, ts: i64) {
 }
 
 #[test]
-#[ignore = "RED: re-fail of an already-failed task leaves an elapsed defer_until (prints '2 日後') — see notes"]
 fn refail_of_already_failed_task_refreshes_elapsed_defer_until() {
     let f = Fixture::new("refail-defer");
     let id = f.add("task failed twice");
@@ -47,7 +46,11 @@ fn refail_of_already_failed_task_refreshes_elapsed_defer_until() {
     assert_eq!(o.code, 0, "first fail: {}", o.both());
     assert_eq!(f.row(&id)["status"], "deferred", "fixture: {}", f.row(&id));
     set_defer(&f, &id, now_unix() - 200_000);
-    assert_eq!(f.status(&id), "failed", "fixture: elapsed deferral => failed");
+    assert_eq!(
+        f.status(&id),
+        "failed",
+        "fixture: elapsed deferral => failed"
+    );
 
     // Control: the failed row with an elapsed deferral is handed out.
     let o = f.run(&["next", "--claim"]);
@@ -86,7 +89,10 @@ fn refail_of_already_failed_task_refreshes_elapsed_defer_until() {
         );
     } else {
         assert!(
-            out.contains("not") || out.contains("未") || out.contains("refresh") || out.contains("更新"),
+            out.contains("not")
+                || out.contains("未")
+                || out.contains("refresh")
+                || out.contains("更新"),
             "non-zero exit must say the deferral was not refreshed: {out}"
         );
     }

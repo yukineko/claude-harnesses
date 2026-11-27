@@ -3,7 +3,15 @@
 //! Claim-reproduction test for the overwatch hooks.json routing, split out of
 //! `cli_contract.rs` (file-growth cap). Claim "rd": `overwatch status` runs
 //! only at SessionStart; every other route only runs the `presence` recorder
-//! (incl. SubagentStop and PostToolUse `Agent|Task`, backlog afd18dc0).
+//! (incl. SubagentStop and PostToolUse `Agent|Task`, backlog afd18dc0), except
+//! Stop, which runs exactly the ask-learn learner (user ruling 2026-11-28,
+//! docs/specs/blastguard-ask-learning.md: "Stop hook in overwatch runs
+//! `ask-learn` (incremental) with a time budget").
+//!
+//! Re-anchored 2026-11-28 by the independent test author: the named property
+//! (2026-10-27, "`overwatch status` runs only at SessionStart") is unchanged
+//! and still asserted with its original messages. Only the exact event/route
+//! list gained the Stop → `ask-learn --hook --budget-secs 15` (timeout 30) row.
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -24,14 +32,21 @@ fn claim_rd_hooks_json_status_only_at_session_start() {
     names.sort();
     assert_eq!(
         names,
-        ["PostToolUse", "SessionEnd", "SessionStart", "SubagentStop"]
+        [
+            "PostToolUse",
+            "SessionEnd",
+            "SessionStart",
+            "Stop",
+            "SubagentStop"
+        ]
     );
     let status = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status");
     let presence = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence");
+    let ask_learn = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch ask-learn --hook --budget-secs 15");
     // (event, matcher of each group (None = no matcher), expected commands of
     // that group in order). Exact: no extra group, no extra command.
     type Group<'a> = (Option<&'a str>, Vec<&'a Value>);
-    let expected: [(&str, Vec<Group>); 4] = [
+    let expected: [(&str, Vec<Group>); 5] = [
         ("SessionStart", vec![(None, vec![&presence, &status])]),
         (
             "PostToolUse",
@@ -40,6 +55,7 @@ fn claim_rd_hooks_json_status_only_at_session_start() {
                 (Some("Agent|Task"), vec![&presence]),
             ],
         ),
+        ("Stop", vec![(None, vec![&ask_learn])]),
         ("SubagentStop", vec![(None, vec![&presence])]),
         ("SessionEnd", vec![(None, vec![&presence])]),
     ];
@@ -54,7 +70,10 @@ fn claim_rd_hooks_json_status_only_at_session_start() {
             for (h, w) in hs.iter().zip(want) {
                 assert_eq!(h["type"], json!("command"));
                 assert_eq!(&h["command"], w, "{ev}");
-                assert_eq!(h["timeout"], json!(5));
+                // ask-learn has a 15 s internal budget, so its hook timeout
+                // is 30; every other route keeps 5.
+                let want_timeout = if h["command"] == ask_learn { 30 } else { 5 };
+                assert_eq!(h["timeout"], json!(want_timeout), "{ev}");
                 if h["command"] == status {
                     status_events.push(ev);
                 }

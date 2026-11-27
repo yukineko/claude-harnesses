@@ -189,6 +189,29 @@ def project_dir_for(cwd: str) -> tuple[str, str | None]:
     return cwd, f"project_dir=cwd (git common dir {common!r} is not a .git dir)"
 
 
+def verify_blastguard(binary: str) -> str | None:
+    """None when ``binary --version`` exits 0 printing ``blastguard <version>``
+    (``main.rs``: ``println!("blastguard {}", CARGO_PKG_VERSION)``), else why not.
+
+    Without this, any silent exit-0 executable (``/bin/true``) parses as
+    ``allow`` (empty stdout is blastguard's Allow), zeroing the FP measurement.
+    """
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, stdin=subprocess.DEVNULL,
+                             timeout=HOOK_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return "--version timed out"
+    except OSError as e:
+        return f"--version could not be run: {e}"
+    if out.returncode != 0:
+        return f"--version exit {out.returncode}"
+    text = out.stdout.decode("utf-8", errors="replace").strip()
+    parts = text.split()
+    if len(parts) != 2 or parts[0] != "blastguard" or not parts[1][:1].isdigit():
+        return f"--version output is not 'blastguard <version>': {text[:100]!r}"
+    return None
+
+
 def parse_output(code: int | None, stdout: str) -> tuple[str, str]:
     """(decision, reason) from the binary's exit code and stdout."""
     if code != 0:
@@ -374,6 +397,11 @@ def main(argv: list | None = None) -> int:
 
     if not os.access(a.binary, os.X_OK):
         print(f"blastguard_fp_replay: --binary {a.binary!r} is not executable", file=sys.stderr)
+        return 2
+    why = verify_blastguard(a.binary)
+    if why is not None:
+        print(f"blastguard_fp_replay: --binary {a.binary!r} is not verified as blastguard: "
+              f"{why}; refusing to replay (a silent exit 0 would read as allow)", file=sys.stderr)
         return 2
     if a.home_mode == "sandbox":
         why = sandbox_precondition()

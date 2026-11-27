@@ -23,6 +23,9 @@ import blastguard_fp_replay as replay  # noqa: E402
 
 FAKE = """#!{python}
 import json, os, sys
+if sys.argv[1:] == ["--version"]:
+    print("blastguard 0.0.0-fake")
+    sys.exit(0)
 raw = sys.stdin.read()
 p = json.loads(raw)
 rec = os.environ["FAKE_BG_RECORD"]
@@ -198,7 +201,9 @@ class Undetermined(Base):
     def test_timeout_is_undetermined(self):
         slow = os.path.join(self.tmp, "slow-blastguard")
         with open(slow, "w") as fh:
-            fh.write(f"#!{sys.executable}\nimport sys, time\nsys.stdin.read()\ntime.sleep(30)\n")
+            fh.write(f"#!{sys.executable}\nimport sys, time\n"
+                     "if sys.argv[1:] == ['--version']:\n    print('blastguard 0.0.0-fake'); sys.exit(0)\n"
+                     "sys.stdin.read()\ntime.sleep(30)\n")
         os.chmod(slow, os.stat(slow).st_mode | stat.S_IXUSR)
         saved = replay.HOOK_TIMEOUT_S
         replay.HOOK_TIMEOUT_S = 1

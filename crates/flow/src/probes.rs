@@ -475,6 +475,16 @@ mod tests {
         assert!(matches!(parse_claims(r#"{"k":{}}"#, "s"), Obs::Unknown(_)));
     }
 
+    /// condukt の `state claims` は claim::Registry をそのまま出す: ファイルの claim は top level に flatten、
+    /// タスクの claim（claim-task --hashkey）は入れ子の "task_claims" の下（crates/condukt/src/claim.rs の Registry）。
+    /// 空の台帳は `{"task_claims":{}}` になり、外側のキー "task_claims" を claim 1 件と読んで Unknown になっていた。
+    #[test]
+    fn claims_parsing_reads_condukt_registry_shape() {
+        assert_eq!(parse_claims(r#"{"task_claims":{}}"#, "s"), Obs::Known(vec![]));
+        let c = r#"{"src/a.rs":{"run_id":"run-1"},"task_claims":{"hk1":{"run_id":"flow-s"},"hk2":{"run_id":"flow-o"}}}"#;
+        assert_eq!(parse_claims(c, "s"), Obs::Known(vec!["hk1".to_string()]));
+    }
+
     #[test]
     fn circuit_parsing_requires_code_and_verdict_to_agree() {
         assert_eq!(

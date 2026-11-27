@@ -1170,6 +1170,20 @@ pub(in crate::detect) fn python_redirect_view(
     src: &str,
     keep: impl Fn(&str) -> bool,
 ) -> Option<String> {
+    python_redirect_view_with(src, keep, false)
+}
+
+/// [`python_redirect_view`]; with `keep_separators` the shell command
+/// separators `;`, `&` and `|` of blanked text stay as they are (backlog
+/// c5202092). A literal such as `"a && b"` is then cut into the same number of
+/// shell segments in the view as in the raw text, which the segment view
+/// ([`super::super::heredoc::python_stdin_segment_view`]) needs to stay
+/// index-aligned. The kept characters are operators between blank segments.
+pub(in crate::detect) fn python_redirect_view_with(
+    src: &str,
+    keep: impl Fn(&str) -> bool,
+    keep_separators: bool,
+) -> Option<String> {
     let src = &*python_newlines(src);
     code_view(src)?;
     let chars: Vec<char> = src.chars().collect();
@@ -1184,6 +1198,7 @@ pub(in crate::detect) fn python_redirect_view(
             '\n' => '\n',
             '\'' | '"' | '\\' => ' ',
             c if kept => c,
+            ';' | '&' | '|' if keep_separators => c,
             _ => ' ',
         }));
     };

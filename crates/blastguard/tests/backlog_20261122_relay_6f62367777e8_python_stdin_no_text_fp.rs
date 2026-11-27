@@ -141,7 +141,7 @@ fn unallowed(cmd: &str, tag: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED(c5202092): relay bgr-6f62367777e8 — quoted python3 - heredoc refused as 'program is not on the command line — no text to read'"]
+#[ignore = "RED(c5202092, narrowed): the misleading 'no text to read' reason is fixed (the body's backtick/&&/; literal text was read as shell); remaining reason is S5 'open on a path the program text does not determine' (p rebound across two files) -- Allow here is a ruling question"]
 fn relay_6f62367777e8_exact_command_is_allow() {
     assert!(EXACT.contains(ORIG_CD), "fixture: cd target present");
     let bad = unallowed(EXACT.trim_end_matches('\n'), "exact");
@@ -150,4 +150,15 @@ fn relay_6f62367777e8_exact_command_is_allow() {
         "expected Allow for the verbatim relayed command:\n{}",
         bad.join("\n")
     );
+}
+
+/// c5202092: whatever the verdict, the reason must not claim the program has
+/// no text when it is a quoted heredoc body.
+#[test]
+fn relay_6f62367777e8_reason_does_not_claim_no_text_to_read() {
+    let bad: Vec<String> = unallowed(EXACT.trim_end_matches('\n'), "reason")
+        .into_iter()
+        .filter(|b| b.contains("no text to read"))
+        .collect();
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

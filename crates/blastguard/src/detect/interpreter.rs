@@ -28,8 +28,8 @@ use osascript::osascript_app_delete;
 pub(super) use osascript::osascript_program_delete;
 pub(super) use python_file::{
     python_file_body_verdict, python_literal_text_never_runs, python_program_enters_stdin_console,
-    python_program_only_prints, python_redirect_view, python_stdin_body_reading,
-    python_written_program_verdict,
+    python_program_only_prints, python_redirect_view, python_redirect_view_with,
+    python_stdin_body_reading, python_written_program_verdict,
 };
 pub(super) use python_written_files::python_program_writes;
 pub(super) use shell_calls::python_body_segment_verdict;

@@ -1473,20 +1473,77 @@ pub(super) fn judged_with_python_body_replaced(
 ) -> Decision {
     let judged = super::detect_bash_after_data_bodies(cmd, depth, ctx);
     match python_body_replaced_by_pass(cmd) {
-        Some(bodyless) => {
-            super::git_apply_patch::stronger(judged, super::detect_bash(&bodyless, depth, ctx))
-        }
+        Some(Ok(bodyless)) => super::git_apply_patch::stronger(
+            judged,
+            super::detect_bash(&bodyless, depth.saturating_add(1), ctx),
+        ),
+        // No stand-in survives as the body: the lines after the delimiter
+        // cannot be judged apart from it, so refuse (never Allow).
+        Some(Err(())) => super::git_apply_patch::stronger(
+            judged,
+            Decision::ask(
+                "the lines after a Python program fed on stdin could not be judged apart \
+                 from its text (no stand-in line stays clear of the here-document delimiter)",
+            ),
+        ),
         None => judged,
     }
 }
 
-fn python_body_replaced_by_pass(cmd: &str) -> Option<String> {
+/// Stand-in program lines, tried in order. Each is a complete Python program
+/// that does nothing; they differ so one is never equal to the delimiter line.
+const BODY_STAND_INS: [&str; 4] = ["pass", "pass #", "pass # .", "pass # .."];
+
+/// `Some(Ok(text))`: `cmd` with the body replaced by the first stand-in that
+/// stays the WHOLE body when `text` is read back by the same parser (a stand-in
+/// equal to the delimiter closes the here-document itself, leaves the body
+/// empty and re-grows on every round) and leaves `after` as it was.
+/// `Some(Err(()))`: none does. `None`: nothing to do (no lines after the
+/// delimiter, or the body already is a stand-in, which also stops the
+/// recursion of the caller).
+fn python_body_replaced_by_pass(cmd: &str) -> Option<Result<String, ()>> {
     let parts = super::heredoc::python_stdin_here_document(cmd)?;
-    if parts.after.trim().is_empty() || parts.body == "pass\n" {
+    if parts.after.trim().is_empty()
+        || BODY_STAND_INS
+            .iter()
+            .any(|s| parts.body == format!("{s}\n"))
+    {
         return None;
     }
     let (head, tail) = parts.without_body.split_at(parts.head_len);
-    Some(format!("{head}pass\n{tail}"))
+    for stand_in in BODY_STAND_INS {
+        let text = format!("{head}{stand_in}\n{tail}");
+        let kept = super::heredoc::python_stdin_here_document(&text)
+            .is_some_and(|p| p.body == format!("{stand_in}\n") && p.after == parts.after);
+        if kept {
+            return Some(Ok(text));
+        }
+    }
+    Some(Err(()))
+}
+
+/// Per line (backlog c5202092): of the two blanked views of a Python body
+/// (`plain`, and `seps`, which keeps the `;` / `&` / `|` of blanked literals),
+/// the line that the segment splitter cuts into as many segments as the raw
+/// line. A literal such as `"a && b"` cuts the raw line in two, which only
+/// `seps` reproduces; a line whose literal holds a quote-protected `;` cuts
+/// into one, which only `plain` reproduces. `None` when the three texts differ
+/// in line count or a line matches in neither view (the view must stay
+/// index-aligned with `split_segments`).
+pub(super) fn segment_aligned_body(raw: &str, plain: &str, seps: &str) -> Option<String> {
+    let (r, p, s): (Vec<&str>, Vec<&str>, Vec<&str>) = (
+        raw.split('\n').collect(),
+        plain.split('\n').collect(),
+        seps.split('\n').collect(),
+    );
+    if p.len() != r.len() || s.len() != r.len() {
+        return None;
+    }
+    let n = |l: &str| super::split_segments(l).len();
+    let lines: Option<Vec<&str>> = (0..r.len())
+        .map(|k| [p[k], s[k]].into_iter().find(|v| n(v) == n(r[k])))
+        .collect();
+    Some(lines?.join("\n"))
 }
 
 /// `decompound` (the compound-syntax flattening of the stdin-exec audit) of

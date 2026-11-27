@@ -828,17 +828,9 @@ pub(super) fn python_stdin_here_document(cmd: &str) -> Option<HereDocumentParts>
 pub(super) fn python_stdin_segment_view(cmd: &str) -> Option<String> {
     let parts = python_stdin_here_document(cmd)?;
     let keep = |text: &str| !text.chars().any(char::is_whitespace);
-    let body = super::interpreter::python_redirect_view(&parts.body, keep)?;
-    let (raw_lines, view_lines): (Vec<&str>, Vec<&str>) =
-        (parts.body.split('\n').collect(), body.split('\n').collect());
-    if raw_lines.len() != view_lines.len()
-        || raw_lines
-            .iter()
-            .zip(&view_lines)
-            .any(|(r, v)| super::split_segments(r).len() != super::split_segments(v).len())
-    {
-        return None;
-    }
+    let view_of = |seps| super::interpreter::python_redirect_view_with(&parts.body, keep, seps);
+    let body =
+        super::heredoc_data::segment_aligned_body(&parts.body, &view_of(false)?, &view_of(true)?)?;
     let (head, tail) = parts.without_body.split_at(parts.head_len);
     let view = format!("{head}{body}{tail}");
     (super::split_segments(&view).len() == super::split_segments(cmd).len()).then_some(view)

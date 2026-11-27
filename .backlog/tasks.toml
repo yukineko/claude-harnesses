@@ -530,6 +530,8 @@ notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between
 created_at = 1795804328
 updated_at = 1795804328
 weight = 0.0
+issue_number = 2000
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2000"
 rev = 0
 
 [task.repro]

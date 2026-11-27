@@ -95165,3 +95165,236 @@ rev = "3f98b1ac6d49bf6a8e80dd68395c17b830ebf792"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "796d27b6"
+title = '''blastguard: backlog_20261114_dup_target_quoted_dollar_fp red on main (bash <&'$fd' and bash <&\$fd are Ask, expected Allow)'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed.
+Needs a user ruling: ruling 2026-11-18 T2 (crates/blastguard/src/detect/ast/SUBSET.md item 23) names bash <&'$fd' as Undetermined, while this item's 2026-11-14 test asserts Allow. Fix implemented on branch condukt/run-20261121-112252-65499/run-20261121-112252-65499/t1 commit 13e75a641 (FdTarget::Invalid for a literal non-fd dup target -> Allow; also makes bash <&abc Allow) and amends T2's wording; not merged because amending a user ruling is the user's call (policy answer auto-chose keep T2). If the user rules Allow, merge that branch; else re-anchor the test to T2."""
+created_at = 1795155655
+updated_at = 1795780788
+weight = 0.0
+issue_number = 1899
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1899"
+issue_closed_at = 1795780793
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp"
+rev = "cc0f372ac2f5406626a03b2ed072866af8d70773"
+observed_at = 1795155655
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.25s
+     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-aa1e9ecd080bafd1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp"
+exit = 0
+passed = 4
+rev = "e59a949a46cb606049b3454c84b08887a6b3108f"
+observed_at = 1795780735
+output_digest = "sha256:21961b981acc29ee227b060881bcedd0accb49ea10337d6c8956e9981f706ad8"
+excerpt = """
+
+running 4 tests
+test bash_dup_backslash_escaped_dollar_fd_is_undetermined_per_t2 ... ok
+test bash_dup_single_quoted_dollar_fd_is_undetermined_per_t2 ... ok
+test control_bash_dup_unquoted_dollar_fd_is_not_allow ... ok
+test control_bash_dup_double_quoted_dollar_fd_is_not_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling blastguard v0.2.938 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 51.28s
+     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-be65a2f2d36a6473)
+"""
+
+[task.closure.red]
+rev = "a8aa29f49360b796d23cef16c5fdccfe5704f097"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "dd5c4fe9"
+title = "blastguard: harmful program built from three determined substs in a procsub is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny
+needs ruling (which leading-dash echo operands are literal); re-handed 2026-11-21 although failed in 2048ca4eb — defer appears lost on main"""
+created_at = 1795155345
+updated_at = 1795781023
+weight = 0.0
+issue_number = 1896
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1896"
+issue_closed_at = 1795781026
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored three_determined_substs_in_procsub_is_deny --exact"
+rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
+observed_at = 1795155345
+detail = """
+exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes"
+exit = 0
+passed = 9
+rev = "8c942181427b948f977681fcfb0fdf6f273fd71c"
+observed_at = 1795781015
+output_digest = "sha256:9756352f13591b12bc057cd19c160fd5352621a53edff28db39debe22a4203d9"
+excerpt = """
+
+running 10 tests
+test echo_quote_split_argument_in_procsub_is_deny ... ignored, backlog c7f288b7: RED: quote-split harmful echo argument in a procsub is Ask, not Deny
+test echo_e_newline_split_in_procsub_is_deny ... ok
+test echo_of_inner_echo_to_bash_feeder_is_deny ... ok
+test echo_e_hex_escape_through_cat_to_bash_is_deny ... ok
+test bash_c_of_determined_harmful_subst_is_deny ... ok
+test alias_echo_then_procsub_is_not_allow ... ok
+test printf_shadowed_by_function_then_procsub_is_not_allow ... ok
+test eval_of_determined_harmful_subst_through_cat_is_deny ... ok
+test export_f_echo_then_bash_c_procsub_is_not_allow ... ok
+test three_determined_substs_in_procsub_is_deny ... ok
+
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Compiling blastguard v0.2.939 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.54s
+     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-b0260f36ee12edea)
+"""
+
+[task.closure.red]
+rev = "a8aa29f49360b796d23cef16c5fdccfe5704f097"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b1e6f2a7"
+title = "blastguard test RED: daf7611b allow_env_dash_s_ls gets Ask (env -S not modelled)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "test-red",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+env -S 'ls -la' gets Ask: env option -S is not modelled (Table B.5: Undetermined); test expects Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case.
+fix done+verifier pass but NOT verified: run-20261121-043744-39490 envsplit, branch condukt/run-20261121-043744-39490/envsplit @696a95a19 (unmerged). Regression confirmed (c8f8dc0a3 ok -> 90bebb79e S4 b5.rs Ask). GREEN once @696a95a19: b1e6f2a7_env_split_string_b5 ok 13 passed; daf7611b 33; env_split_string_comment_collapse 4; s4_b5_layer 57. tdd green refused by testscope: 'rerun refused: tdd red --cmd cargo test -p blastguard --test b1e6f2a7_env_split_string_b5 already ran on this exact tree (696a95a19...:1dcbe1ce95dcba8e ...)' — a first tdd red attempt (checkout+red+restore in one command) was ledgered against the GREEN tree fingerprint (suspected testscope defect: fingerprint taken before the command mutates the tree). Needs human ruling: clear/correct the ledger entry, or accept the existing GREEN evidence. | RULED 2026-11-21 by user: clear/correct the mis-ledgered testscope entry and redo RED->GREEN by the normal procedure; file the fingerprint-timing defect (fingerprint taken before the command mutates the tree) as a separate backlog item with a RED test. Fix branch condukt/run-20261121-043744-39490/envsplit @696a95a19."""
+created_at = 1795110476
+updated_at = 1795781213
+weight = 0.0
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test daf7611b_executor_behaviour allow_env_dash_s_ls"
+rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
+observed_at = 1795110476
+detail = """
+exit 101: 5ba/crates/progeffect)
+   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.20s
+     Running tests/daf7611b_executor_behaviour.rs (target/debug/deps/daf7611b_executor_behaviour-913846659bed5835)
+error: test failed, to rerun pass `-p blastguard --test daf7611b_executor_behaviour`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test daf7611b_executor_behaviour"
+exit = 0
+passed = 33
+rev = "1e42c7c69b77bb0287040ddc461b2b06ea7c043d"
+observed_at = 1795781206
+output_digest = "sha256:6857915e05484fcb98a1ac8ade9adf207d746d20de2650890cda6f327f99efee"
+excerpt = """
+
+running 33 tests
+test allow_bun_run_build ... ok
+test allow_bun_test ... ok
+test allow_awk_date_getline ... ok
+test allow_deno_run_main ... ok
+test allow_git_c_fsmonitor_true ... ok
+test allow_git_c_pager_less ... ok
+test allow_git_c_pager_log_false ... ok
+test allow_git_c_user_name ... ok
+test allow_osascript_scpt ... ok
+test allow_bun_e_console ... ok
+test ask_awk_pipe_to_sh ... ok
+test allow_deno_eval_console ... ok
+test allow_awk_pipe_sort ... ok
+test allow_awk_regex_alternation ... ok
+test allow_env_dash_s_ls ... ok
+test allow_awk_fs_pipe ... ok
+test allow_awk_dash_f_progfile ... ok
+test ask_awk_system_dynamic ... ok
+test deny_deno_repl_eval_remove ... ok
+test ask_git_config_env_pager ... ok
+test ask_git_c_include_path ... ok
+test deny_gawk_e_system_rm ... ok
+test deny_env_split_string_rm ... ok
+test deny_git_alias_clean_fdx ... ok
+test deny_git_core_editor_rm ... ok
+test deny_git_core_sshcommand_rm ... ok
+test deny_git_credential_helper_rm ... ok
+test ask_osascript_do_shell_script_dynamic ... ok
+test deny_git_alias_shell_rm ... ok
+test deny_osascript_js_doshellscript_rm ... ok
+test deny_sudo_env_dash_s_rm ... ok
+test deny_node_r_then_e_rmsync ... ok
+test deny_python3_w_then_c_rmtree ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.940 (/Users/yuki/src/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.49s
+     Running tests/daf7611b_executor_behaviour.rs (target/debug/deps/daf7611b_executor_behaviour-b297ec2ca957f8ef)
+"""
+
+[task.closure.red]
+rev = "a8aa29f49360b796d23cef16c5fdccfe5704f097"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

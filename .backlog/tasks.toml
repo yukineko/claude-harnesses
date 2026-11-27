@@ -560,40 +560,6 @@ exit 101: mpiling blastguard v0.2.757 (/Users/yuki/src/.harness-worktrees/sessio
 error: test failed, to rerun pass `-p blastguard --test heredoc_script_failopen_red_20261108`"""
 
 [[task]]
-id = "b1e6f2a7"
-title = "blastguard test RED: daf7611b allow_env_dash_s_ls gets Ask (env -S not modelled)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "test-red",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-env -S 'ls -la' gets Ask: env option -S is not modelled (Table B.5: Undetermined); test expects Allow. Observed 2026-11-20 on main a0ba7bad0 (detached worktree verify-main-q3q4), found while integrating Q3/Q4 deny-target table (7275b9d9); same failure on the integration tree. Readings: (a) real regression on main; (b) stale assert vs a later ruling or the S5 AST evaluator; distinguish by git log -S on the asserted case.
-fix done+verifier pass but NOT verified: run-20261121-043744-39490 envsplit, branch condukt/run-20261121-043744-39490/envsplit @696a95a19 (unmerged). Regression confirmed (c8f8dc0a3 ok -> 90bebb79e S4 b5.rs Ask). GREEN once @696a95a19: b1e6f2a7_env_split_string_b5 ok 13 passed; daf7611b 33; env_split_string_comment_collapse 4; s4_b5_layer 57. tdd green refused by testscope: 'rerun refused: tdd red --cmd cargo test -p blastguard --test b1e6f2a7_env_split_string_b5 already ran on this exact tree (696a95a19...:1dcbe1ce95dcba8e ...)' — a first tdd red attempt (checkout+red+restore in one command) was ledgered against the GREEN tree fingerprint (suspected testscope defect: fingerprint taken before the command mutates the tree). Needs human ruling: clear/correct the ledger entry, or accept the existing GREEN evidence. | RULED 2026-11-21 by user: clear/correct the mis-ledgered testscope entry and redo RED->GREEN by the normal procedure; file the fingerprint-timing defect (fingerprint taken before the command mutates the tree) as a separate backlog item with a RED test. Fix branch condukt/run-20261121-043744-39490/envsplit @696a95a19."""
-created_at = 1795110476
-updated_at = 1795220549
-defer_until = 1795377551
-weight = 0.0
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test daf7611b_executor_behaviour allow_env_dash_s_ls"
-rev = "4c286f7b61e70f4a56ccb658a200c3c4085bdf1a"
-observed_at = 1795110476
-detail = """
-exit 101: 5ba/crates/progeffect)
-   Compiling blastguard v0.2.761 (/Users/yuki/src/.harness-worktrees/session-179495ba/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.20s
-     Running tests/daf7611b_executor_behaviour.rs (target/debug/deps/daf7611b_executor_behaviour-913846659bed5835)
-error: test failed, to rerun pass `-p blastguard --test daf7611b_executor_behaviour`"""
-
-[[task]]
 id = "7d85ed1e"
 title = "blastguard FP: unquoted echo feeder piped to bash (echo a | bash) is Ask"
 project = "/Users/yuki/src/harness"
@@ -623,75 +589,6 @@ exit 101: group-feeder-piped-to-shell/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.93s
      Running tests/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp.rs (target/debug/deps/backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp-71b6ff5cfd040988)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261120_unquoted_echo_feeder_piped_to_bash_fp`"""
-
-[[task]]
-id = "dd5c4fe9"
-title = "blastguard: harmful program built from three determined substs in a procsub is Ask, not Deny"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-system harm reaches Ask, rule requires Deny (memory system-harm-always-deny). Found by the 40dc52c0 adversarial round (run-20261120-071122-49691); pre-existing (also on 16aa6417a); observed on main f670f7bd9 (0.2.802): Ask in main. RED in crates/blastguard/tests/backlog_20261120_procsub_preexisting_holes.rs (commit 0a843a18e). fn three_determined_substs_in_procsub_is_deny
-needs ruling (which leading-dash echo operands are literal); re-handed 2026-11-21 although failed in 2048ca4eb — defer appears lost on main"""
-created_at = 1795155345
-updated_at = 1795264380
-defer_until = 1795437180
-weight = 0.0
-issue_number = 1896
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1896"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_procsub_preexisting_holes -- --ignored three_determined_substs_in_procsub_is_deny --exact"
-rev = "0a843a18e1f12269c0f618943f1c5b3e9349ff46"
-observed_at = 1795155345
-detail = """
-exit 101: LED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.60s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_procsub_preexisting_holes.rs (target/debug/deps/backlog_20261120_procsub_preexisting_holes-69b2e68271dc6275)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_procsub_preexisting_holes`"""
-
-[[task]]
-id = "796d27b6"
-title = '''blastguard: backlog_20261114_dup_target_quoted_dollar_fp red on main (bash <&'$fd' and bash <&\$fd are Ask, expected Allow)'''
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Observed 2026-11-20 by the run-20261120-071122-49691 driver via donegate after merging 8f2fe8c18 (which touched no src: version files + an all-ignored test file). main now cc0f372ac (peer merge 0.2.805). Not bisected; not run on the commit before 8f2fe8c18. Readings: (a) FP regression from a peer blastguard merge between 0.2.79x and 0.2.805; (b) intended by a newer ruling, then the asserts are frozen and need a ruling. Distinguish by bisecting the test over the blastguard merges since the test last passed.
-Needs a user ruling: ruling 2026-11-18 T2 (crates/blastguard/src/detect/ast/SUBSET.md item 23) names bash <&'$fd' as Undetermined, while this item's 2026-11-14 test asserts Allow. Fix implemented on branch condukt/run-20261121-112252-65499/run-20261121-112252-65499/t1 commit 13e75a641 (FdTarget::Invalid for a literal non-fd dup target -> Allow; also makes bash <&abc Allow) and amends T2's wording; not merged because amending a user ruling is the user's call (policy answer auto-chose keep T2). If the user rules Allow, merge that branch; else re-anchor the test to T2."""
-created_at = 1795155655
-updated_at = 1795228121
-defer_until = 1795400921
-weight = 0.0
-issue_number = 1899
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1899"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp"
-rev = "cc0f372ac2f5406626a03b2ed072866af8d70773"
-observed_at = 1795155655
-detail = """
-exit 101:  (/Users/yuki/src/.harness-worktrees/file-dup-target-red/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.25s
-     Running tests/backlog_20261114_dup_target_quoted_dollar_fp.rs (target/debug/deps/backlog_20261114_dup_target_quoted_dollar_fp-aa1e9ecd080bafd1)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261114_dup_target_quoted_dollar_fp`"""
 
 [[task]]
 id = "61b6ba67"

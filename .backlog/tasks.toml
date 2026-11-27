@@ -1046,6 +1046,8 @@ notes = "Observed 2026-11-27 by flow eaa077f4 at c02bbba2e+68bd7d93 merge: backl
 created_at = 1795785226
 updated_at = 1795785226
 weight = 0.0
+issue_number = 1993
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1993"
 rev = 0
 
 [task.repro]

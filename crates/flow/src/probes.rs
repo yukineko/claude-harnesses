@@ -199,6 +199,12 @@ pub fn parse_next(stdout: &str) -> Obs<Option<Task>> {
 
 /// `condukt state claims` stdout (exit already checked == 0): keys of the
 /// entries whose `run_id` is `flow-<session>`.
+///
+/// The output is condukt's `claim::Registry` verbatim: file claims flattened
+/// at the top level, task claims (`state claim-task --hashkey`) nested under
+/// `"task_claims"` (an empty ledger is `{"task_claims":{}}`). Both maps are
+/// scanned. `"task_claims"` present but not an object, or any claim without a
+/// `run_id` string, is `Unknown` (CLAUDE.md §3) — never an empty answer.
 pub fn parse_claims(stdout: &str, session: &str) -> Obs<Vec<String>> {
     let v: Value = match serde_json::from_str(stdout.trim()) {
         Ok(v) => v,
@@ -209,12 +215,27 @@ pub fn parse_claims(stdout: &str, session: &str) -> Obs<Vec<String>> {
     };
     let run = format!("flow-{session}");
     let mut held = Vec::new();
-    for (k, entry) in obj {
-        match entry.get("run_id").and_then(Value::as_str) {
-            Some(r) if r == run => held.push(k.clone()),
-            Some(_) => {}
-            None => return Obs::Unknown(format!("claim {k:?} has no \"run_id\" string")),
+    let mut scan = |map: &serde_json::Map<String, Value>, kind: &str| -> Result<(), String> {
+        for (k, entry) in map {
+            match entry.get("run_id").and_then(Value::as_str) {
+                Some(r) if r == run => held.push(k.clone()),
+                Some(_) => {}
+                None => return Err(format!("{kind} claim {k:?} has no \"run_id\" string")),
+            }
         }
+        Ok(())
+    };
+    let mut files = obj.clone();
+    if let Some(tc) = files.remove("task_claims") {
+        let Some(tc) = tc.as_object() else {
+            return Obs::Unknown("\"task_claims\" is not a JSON object".into());
+        };
+        if let Err(why) = scan(tc, "task") {
+            return Obs::Unknown(why);
+        }
+    }
+    if let Err(why) = scan(&files, "file") {
+        return Obs::Unknown(why);
     }
     Obs::Known(held)
 }
@@ -480,7 +501,10 @@ mod tests {
     /// 空の台帳は `{"task_claims":{}}` になり、外側のキー "task_claims" を claim 1 件と読んで Unknown になっていた。
     #[test]
     fn claims_parsing_reads_condukt_registry_shape() {
-        assert_eq!(parse_claims(r#"{"task_claims":{}}"#, "s"), Obs::Known(vec![]));
+        assert_eq!(
+            parse_claims(r#"{"task_claims":{}}"#, "s"),
+            Obs::Known(vec![])
+        );
         let c = r#"{"src/a.rs":{"run_id":"run-1"},"task_claims":{"hk1":{"run_id":"flow-s"},"hk2":{"run_id":"flow-o"}}}"#;
         assert_eq!(parse_claims(c, "s"), Obs::Known(vec!["hk1".to_string()]));
     }

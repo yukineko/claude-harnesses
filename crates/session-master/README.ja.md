@@ -138,13 +138,21 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
      要素が展開される script 指定は Deny になる（`. "$HOME/.cargo/env"` のように最後の要素が
      literal なら名前で判定して allow）。
      - 非 literal の command 名（`$EDITOR a.rs`）は、引数が 1 つ以上あり全部 literal で、
-       master 専用の効果語（push/merge/pull/rebase/reset/rollout、`next`/`complete`/`gate`/`hook`、
-       `--session`、git 等の sensitive program 名）を含まないときだけ allow（SPEC の deny-by-default は
-       master 専用の*効果*を止める意図で、未知語全般ではない）。引数なしの `$X`・非 literal 引数・
-       効果語つき（`$G push`）は判定不能のまま。
-     - 引数を実行しないと分かっているプログラム（`man`/`info`、`brew install` 等、`fd`（`-x`/`-X` なし）、
-       `docker|podman exec|logs|ps…`、`npm|pnpm|yarn|bun test|run|install…`）は、引数が git/ssh 等の
-       名前でも data とみなして allow。それ以外の未知プログラムは従来どおり wrapper 扱い。
+       次のどれにも当たらないときだけ allow（0.1.9 で語彙リスト依存をやめ fail-closed に）:
+       master 専用になりうる git subcommand 語（push/merge/pull/rebase/reset/branch/fetch/
+       update-ref/symbolic-ref/checkout/switch…）・`next`/`complete`/`gate`/`hook`・`--session`・
+       git 等の sensitive program 名・git `-c key=value`・subcommand 位置の裸の語（`$G sy origin main` の
+       `sy`: alias の可能性。`README` のような拡張子なしの語もここで Deny になる）。`-c CODE`
+       （key に `.` がない）は literal の `bash -c` と同様に CODE を program として解析する。
+       引数なしの `$X`・非 literal 引数は判定不能のまま。
+     - 引数を実行しないと分かっているプログラム（`info`、`brew install` 等、`fd`（`-x`/`-X` なし）、
+       `docker|podman logs|ps…`、`npm|pnpm|yarn|bun test|run|install…`）は、引数が git/ssh 等の
+       名前でも data とみなして allow。subcommand は global option とその値（`--config X`、
+       `--prefix X`）を読み飛ばしてから取る。`docker exec` は container 内のコマンドを program として
+       判定する（`docker exec c git status` は allow、`… git push` は Deny）。`man` は
+       `-P/--pager/-H/-B` の値を program として判定する。`MANPAGER`/`PAGER`/`EDITOR`/`GIT_SSH_COMMAND`
+       等の env（前置代入・`export`/`env`）の値も program として判定する。それ以外の未知プログラムは
+       従来どおり wrapper 扱い。
      - `cd /絶対パス && …`（`&&` だけで到達し、`&&` で後続に繋がる 1 stage）は、その後ろの
        HEAD を動かす git をその directory で判定する（feature worktree への `cd && git merge main` は allow）。
        相対・`-`・引数なし・`;`/`||`/パイプ経由・chain 後続の statement は従来どおり判定不能。
@@ -153,9 +161,15 @@ exit: 0 = ok（role は master）、1 = 拒否（member / in_progress でない�
    - **GitHub API 経由の merge/push（0.1.7）**: `gh api` と `curl`/`wget`/`http`/`xh` が write
      （`-X PUT/POST/PATCH/DELETE`、`-f/-F`/`-d` 等のフィールド・データ。明示 GET/HEAD は read）で
      `repos/…/merge`・`merges`・`merge-upstream`・`git/*`・`contents/*` を叩くと master 専用。
-     write なのに endpoint/URL が静的に読めない場合は判定不能（Deny）。
+     write なのに endpoint/URL が静的に読めない場合は判定不能（Deny）。0.1.9: endpoint/URL は
+     生テキストでなく解決後の literal 値で判定する。`gh api graphql` の query が `@file`/`@-`/`--input`
+     由来なら中身が不明なので Deny、`curl -K/--config` は Deny、`.../git-receive-pack` への write は
+     push、`gh repo sync` は master 専用、`gh` の最初の語が既知 command でない（alias/extension）なら
+     Deny。httpie の値を取る option（`-a` 等）と取らない option（`-b`）を区別する。
    - **書いたファイルの実行（0.1.7）**: 同じ program 内で `cp`/`mv`/`ln`/`install`/`rsync`/`tee`/`dd of=`/
-     リダイレクト/`curl -o` で書いた path（またはその配下）を、command 名・shell/インタプリタの
+     リダイレクト/`curl -o` で書いた path（0.1.9: `//`・`/./`・`..` を正規化し、相対 path は追跡中の
+     literal `cd` から解決。ディレクトリへのコピーは `dir/basename(src)` にだけ着地し、再帰コピー・
+     読めない source のときだけ配下全体）を、command 名・shell/インタプリタの
      script 操作数・`source` として実行すると、中身が読めないので判定不能（Deny）。
      `cp scripts/rollout-plugins.sh /tmp/r.sh && bash /tmp/r.sh`・`cp /usr/bin/git /tmp/g && /tmp/g push` が該当。
      正当な「書いて実行」（heredoc で script を作って走らせる等）も止まる。

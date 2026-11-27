@@ -2,7 +2,7 @@
 //! `detect.rs` (file-growth cap). Same three-valued contract: a master-only
 //! effect is `found`, "cannot tell" is `undet`, anything else is silent.
 
-use super::{joined, Arg, Op, Walker};
+use super::{joined, positionals, Arg, Op, Walker};
 
 const WEB_DATA_LONG: &[&str] = &[
     "data",
@@ -39,6 +39,24 @@ const WEB_VALUE_LONG: &[&str] = &[
     "cert",
     "config",
     "directory-prefix",
+    // httpie
+    "auth",
+    "auth-type",
+    "style",
+    "print",
+    "pretty",
+    "session",
+    "session-read-only",
+    "cert-key",
+    "verify",
+    "ssl",
+    "timeout",
+    "max-redirects",
+    "max-headers",
+    "default-scheme",
+    "response-charset",
+    "response-mime",
+    "format-options",
 ];
 
 fn upper(s: &str) -> String {
@@ -56,6 +74,10 @@ fn github_write_target(raw: &str) -> Option<Op> {
         .split('/')
         .filter(|s| !s.is_empty())
         .collect();
+    // Smart-HTTP push (`.../r.git/git-receive-pack`) is not under `repos/`.
+    if segs.contains(&"git-receive-pack") {
+        return Some(Op::Push);
+    }
     let repos = segs.iter().position(|s| *s == "repos")?;
     let tail = &segs[repos + 1..];
     if tail.iter().any(|s| s.starts_with("merge")) {
@@ -73,14 +95,43 @@ fn github_write_target(raw: &str) -> Option<Op> {
 /// else unknown keeps the wrapper rule. Build tools (`npm test`, `make`) run
 /// scripts whose content is not read: the same known limit as before.
 pub(super) fn args_are_data(base: &str, args: &[Arg]) -> bool {
-    let first_pos = args.iter().find_map(|a| match a.lit.as_deref() {
-        Some(s) if s.starts_with('-') => None,
-        Some(s) => Some(Some(s)),
-        None => Some(None),
-    });
+    // The subcommand is the first word that is not a global option or that
+    // option's value (`npm --prefix test exec ...` is `exec`, not `test`).
+    const GLOBAL_VALUE: &[&str] = &[
+        "--prefix",
+        "-C",
+        "--dir",
+        "--cwd",
+        "-w",
+        "--workspace",
+        "-F",
+        "--filter",
+        "--registry",
+        "--userconfig",
+        "--globalconfig",
+        "--cache",
+        "--loglevel",
+        "--tag",
+        "--otp",
+        "--scope",
+        "--access",
+        "--node-options",
+    ];
+    let mut j = 0usize;
+    let mut first_pos: Option<Option<&str>> = None;
+    while let Some(a) = args.get(j) {
+        match a.lit.as_deref() {
+            Some(s) if GLOBAL_VALUE.contains(&s) => j += 2,
+            Some(s) if s.starts_with('-') => j += 1,
+            other => {
+                first_pos = Some(other);
+                break;
+            }
+        }
+    }
     let sub_in = |subs: &[&str]| matches!(first_pos, Some(Some(s)) if subs.contains(&s));
     match base {
-        "man" | "info" | "tldr" | "whatis" | "apropos" => true,
+        "info" | "tldr" | "whatis" | "apropos" => true,
         "brew" => sub_in(&[
             "install",
             "uninstall",
@@ -110,11 +161,6 @@ pub(super) fn args_are_data(base: &str, args: &[Arg]) -> bool {
                     || (s.starts_with('-') && !s.starts_with("--") && s[1..].contains(['x', 'X']))
             }
         }),
-        // `exec` runs inside the container, `logs`/`ps`/... run nothing.
-        "docker" | "podman" => sub_in(&[
-            "exec", "logs", "ps", "images", "inspect", "pull", "stop", "start", "restart", "rm",
-            "top", "stats", "version", "info", "cp",
-        ]),
         "npm" | "pnpm" | "yarn" | "bun" => sub_in(&[
             "test",
             "t",
@@ -138,13 +184,68 @@ pub(super) fn args_are_data(base: &str, args: &[Arg]) -> bool {
     }
 }
 
+/// Built-in `gh` command groups; any other first word is an alias or an
+/// extension, whose expansion cannot be read (`gh pm 1` = `gh pr merge 1`).
+const GH_COMMANDS: &[&str] = &[
+    "agent-task",
+    "alias",
+    "api",
+    "attestation",
+    "auth",
+    "browse",
+    "cache",
+    "codespace",
+    "completion",
+    "config",
+    "copilot",
+    "extension",
+    "gist",
+    "gpg-key",
+    "help",
+    "issue",
+    "label",
+    "licenses",
+    "org",
+    "pr",
+    "preview",
+    "project",
+    "release",
+    "repo",
+    "ruleset",
+    "run",
+    "search",
+    "secret",
+    "ssh-key",
+    "status",
+    "variable",
+    "version",
+    "workflow",
+];
+
 impl Walker {
+    /// `gh`: `pr merge` and `repo sync` (moves a branch) are master-only,
+    /// `api` is judged by [`Walker::gh_api`], an unknown first word is an
+    /// unresolvable alias.
+    pub(super) fn gh(&mut self, args: &[Arg], rest: &[Arg]) {
+        let pos = positionals(args, &["-R", "--repo"]);
+        match pos.as_slice() {
+            ["pr", "merge", ..] | ["repo", "sync", ..] => self.found(Op::Merge),
+            ["api", ..] => self.gh_api(args, rest),
+            [first, ..] if !GH_COMMANDS.contains(first) => self.undet(
+                &joined(rest),
+                "gh の最初の語が既知の command でない（alias / extension は展開を読めない）",
+            ),
+            _ => {}
+        }
+    }
+
     /// `gh api ...` with a write method (or `-f/-F` fields, which make it a
     /// POST) to a GitHub endpoint that merges or pushes is master-only; a
     /// write to an endpoint that cannot be read statically is undetermined.
     pub(super) fn gh_api(&mut self, args: &[Arg], rest: &[Arg]) {
         let mut method: Option<Option<String>> = None;
         let mut fields = false;
+        let mut input_file = false;
         let mut field_texts: Vec<&Arg> = Vec::new();
         let mut endpoint: Option<&Arg> = None;
         let mut seen_api = false;
@@ -175,6 +276,7 @@ impl Walker {
                 }
                 "-f" | "-F" | "--field" | "--raw-field" | "--input" => {
                     fields = true;
+                    input_file |= s == "--input";
                     field_texts.extend(args.get(j + 1));
                     j += 2;
                 }
@@ -189,6 +291,7 @@ impl Walker {
                     || s.starts_with("--input=") =>
                 {
                     fields = true;
+                    input_file |= s.starts_with("--input=");
                     field_texts.push(a);
                     j += 1;
                 }
@@ -222,10 +325,22 @@ impl Walker {
             self.undet(&joined(rest), "gh api の write の endpoint が読めない");
             return;
         };
-        if ep.raw.trim_matches(['"', '\'']).trim_start_matches('/') == "graphql" {
-            let risky = field_texts
-                .iter()
-                .any(|f| f.lit.is_none() || f.raw.to_ascii_lowercase().contains("mutation"))
+        // Judged on the resolved literal value, never on the raw text.
+        let Some(lit) = ep.lit.as_deref() else {
+            self.undet(
+                &joined(rest),
+                "gh api の write の endpoint が literal でない（merge/push の可能性）",
+            );
+            return;
+        };
+        if lit.trim_start_matches('/') == "graphql" {
+            // A query read from `@file` / `@-` / `--input` has unknown content.
+            let risky = input_file
+                || field_texts.iter().any(|f| {
+                    f.lit.as_deref().is_none_or(|v| {
+                        v.to_ascii_lowercase().contains("mutation") || v.contains("=@")
+                    })
+                })
                 || method.as_ref().is_some_and(|m| m.is_none());
             if risky {
                 self.undet(
@@ -235,13 +350,8 @@ impl Walker {
             }
             return;
         }
-        match github_write_target(&ep.raw) {
-            Some(op) => self.found(op),
-            None if ep.lit.is_none() => self.undet(
-                &joined(rest),
-                "gh api の write の endpoint が literal でない（merge/push の可能性）",
-            ),
-            None => {}
+        if let Some(op) = github_write_target(lit) {
+            self.found(op);
         }
     }
 
@@ -251,11 +361,28 @@ impl Walker {
     /// statically is undetermined.
     pub(super) fn web_client(&mut self, base: &str, args: &[Arg], rest: &[Arg]) {
         let httpie = matches!(base, "http" | "https" | "xh" | "xhs");
-        let value_chars: &str = if base == "wget" {
+        // Short options that take a value, per tool (httpie: `-b` is a flag,
+        // `-a USER:PASS` takes a value).
+        let value_chars: &str = if httpie {
+            "aAosPp"
+        } else if base == "wget" {
             "XdFTHouAebcmwxKPOt"
         } else {
             "XdFTHouAebcmwxKPt"
         };
+        // A config file (`curl -K` / `--config`) hides method and URL.
+        if !httpie
+            && args.iter().any(|a| {
+                a.lit.as_deref().is_some_and(|s| {
+                    s == "-K" || s == "--config" || s.starts_with("--config=") || {
+                        s.starts_with('-') && !s.starts_with("--") && s[1..].contains('K')
+                    }
+                })
+            })
+        {
+            self.undet(&joined(rest), "curl の設定ファイルが method / URL を隠す");
+            return;
+        }
         let mut explicit_write = false;
         let mut explicit_read = false;
         let mut method_unknown = false;
@@ -351,12 +478,14 @@ impl Walker {
         }
         let mut unresolved = pos.is_empty();
         for a in &pos {
-            if let Some(op) = github_write_target(&a.raw) {
-                self.found(op);
-                return;
-            }
-            if a.lit.is_none() {
-                unresolved = true;
+            match a.lit.as_deref() {
+                Some(l) => {
+                    if let Some(op) = github_write_target(l) {
+                        self.found(op);
+                        return;
+                    }
+                }
+                None => unresolved = true,
             }
         }
         if unresolved {

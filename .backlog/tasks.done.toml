@@ -96575,3 +96575,67 @@ rev = "5fe24fc56c9c260d845ae3038f1215b2f915e47d"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "68bd7d93"
+title = "scripts/test_backlog_audit_b1_0.py Backlog06a9d33fDirectInvocationRunsTests red on main: test_gate_severity_probe_b.py, test_precommit_timing_b.py, test_stop_verify_worktree_foreign_writer_20261115.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "audit",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-15 at a8e92b562, worktree c 03a066401, and acf8a59bd: pytest -q scripts/test_backlog_audit_b1_0.py fails with "['test_gate_severity_probe_b.py', 'test_precommit_timing_b.py', 'test_stop_verify_worktree_foreign_writer_20261115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly" (06a9d33f is done = regression). Facts: test_gate_severity_probe_b.py:229 and test_precommit_timing_b.py:147 DO have 'if __name__ == "__main__": raise SystemExit(pytest.main([__file__]))' (pytest-by-design: pytest.mark.xfail RED suites) so they are not zero-test; the audit AST check (_has_main_guard_calling_unittest_main) only accepts unittest.main => reading (b) audit check too narrow for those two. test_stop_verify_worktree_foreign_writer_20261115.py has NO __main__ guard at all (pytest fixtures + xfail) => reading (a) real regression, direct run runs zero tests. Precedent: 16b69d09 (same defect, closed f2p). Fix: add guard to the third file; decide for the two: accept pytest.main in the audit or switch to unittest.main.
+flow driver 62e92d16 cannot observe RED: repro 'python3 -m pytest ...' is denied in driver sessions and subagents (python -m: Table B.5 Undetermined). Needs a non-driver session."""
+created_at = 1794746822
+updated_at = 1795785210
+weight = 0.0
+issue_number = 1826
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1826"
+issue_closed_at = 1795785212
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_backlog_audit_b1_0.py -k test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
+rev = "acf8a59bda2e65d2f612a1eed804eab98e6485dd"
+observed_at = 1794746822
+detail = """
+exit 1: 1115.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly
+
+scripts/test_backlog_audit_b1_0.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
+1 failed, 10 deselected in 0.36s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
+exit = 0
+passed = 1
+rev = "7193d614d47a1c8fb1d4c18ddd4655fbf041c45a"
+observed_at = 1795785209
+output_digest = "sha256:b1fdf9449b679ff4f3ecd207860662676f467c178be202dfb3630d0054c3a99e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-eaa077f4
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_backlog_audit_b1_0.py .                                     [100%]
+
+============================== 1 passed in 0.31s ===============================
+"""
+
+[task.closure.red]
+rev = "c02bbba2e20ef01280b366142bdad06ea4943fa8"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

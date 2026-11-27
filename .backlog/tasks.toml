@@ -463,14 +463,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release)."
+status = "failed"
+notes = """
+RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release).
+fix attempt fp-687ece3c 1e0bef688 rejected by opus verifier 2026-11-28: RED goes GREEN but base Deny weakens to Ask after python3 -c fan-out padding x2 for 9 system-harm shapes (rm -rf /, cd / && rm -rf etc, D=etc; rm -rf /$D), d4 entries 10-17x, 12 commands >10s (max 33.7s). Not merged. Regression guard + remaining gap filed as 5eab530d. Needs a structural fix that keeps padding-independent Deny."""
 created_at = 1795797276
-updated_at = 1795797276
+updated_at = 1795806441
+defer_until = 1795979241
 weight = 0.0
 issue_number = 1998
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1998"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

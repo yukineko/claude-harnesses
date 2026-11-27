@@ -428,6 +428,27 @@ struct Statement {
     opaque: bool,
     /// Holds a heredoc (`<<`); its body was skipped as data.
     heredoc: bool,
+    /// The separator that ENDS this statement.
+    post: Sep,
+}
+
+/// What ended a [`Statement`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sep {
+    /// End of the command.
+    End,
+    /// `;` or a newline.
+    Seq,
+    /// `&&`
+    And,
+    /// `||`
+    Or,
+    /// `&` (a background job).
+    Bg,
+    /// `(`: a subshell opens after this statement.
+    Open,
+    /// `)`: the subshell closes after this statement.
+    Close,
 }
 
 /// End (exclusive) of the `$(…)` / `<(…)` / `>(…)` whose `(` is at `open`.
@@ -685,12 +706,21 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
             b';' | b'\n' | b'&' | b'|' | b'(' | b')' => {
                 end_word(&mut stage, &mut word, &mut in_word);
                 stages.push(std::mem::take(&mut stage));
+                let doubled = (c == b'&' || c == b'|') && b.get(i + 1) == Some(&c);
                 out.push(Statement {
                     start,
                     end: i,
                     stages: std::mem::take(&mut stages),
                     opaque: std::mem::take(&mut opaque),
                     heredoc: std::mem::take(&mut heredoc),
+                    post: match (c, doubled) {
+                        (b'&', true) => Sep::And,
+                        (b'|', _) => Sep::Or,
+                        (b'&', false) => Sep::Bg,
+                        (b'(', _) => Sep::Open,
+                        (b')', _) => Sep::Close,
+                        _ => Sep::Seq,
+                    },
                 });
                 let mut j = i + 1;
                 if (c == b'&' || c == b'|') && b.get(j) == Some(&c) {
@@ -760,6 +790,7 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
         stages,
         opaque,
         heredoc,
+        post: Sep::End,
     });
     if !pending.is_empty() {
         // Heredoc whose body never started (no newline after it).
@@ -1017,62 +1048,303 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
     Determination::known(all)
 }
 
-/// Outcome of following a statement that is (or holds) a `cd`/`pushd`.
-enum CdStep {
-    /// The statement is not a directory change.
-    NotCd,
-    /// A literal, statically resolvable target: the new base directory.
-    To(PathBuf),
-    /// A directory change whose target cannot be resolved without running the
-    /// shell (`cd`, `cd -`, `cd $X`, `cd ~`, `popd`, a relative target with no
-    /// or a `cd` that is not a plain statement of its own). A relative target
-    /// with no known cwd is NOT this: it stays relative, which callers count
-    /// as inside every root.
-    Unresolvable(String),
+const DIR_CMDS: [&str; 3] = ["cd", "pushd", "popd"];
+/// Words that start a compound command; a directory change after one of them
+/// is conditional or grouped, never a plain statement.
+const COMPOUND_WORDS: [&str; 8] = ["{", "if", "then", "else", "elif", "do", "while", "until"];
+/// Commands that run another command: a directory command among their
+/// arguments is not followed.
+const WRAPPERS: [&str; 11] = [
+    "builtin", "command", "env", "xargs", "sudo", "nohup", "nice", "exec", "eval", "source", ".",
+];
+
+/// Where the shell is, as a set of candidate directories while a statement
+/// runs. One element is the exact answer; several mean the shell may be in
+/// any of them (over-attribution: the restrictive side). Empty = unknown (the
+/// transcript line recorded no cwd).
+struct Walk {
+    /// Every statement's candidate directories, in statement order.
+    bases: Vec<Vec<PathBuf>>,
+    /// Existing directories a followed `cd` entered, by statement index.
+    entered: Vec<(usize, PathBuf)>,
 }
 
-/// Follow `cd <literal>` / `pushd <literal>` in one statement against `base`.
-/// Relative paths that follow in the same command land under the result, not
-/// under the transcript line's cwd (sidechain lines record the PARENT root).
-/// Anything that is not a plain literal `cd` is `Unresolvable` (fail closed).
-fn cd_step(text: &str, base: Option<&Path>) -> CdStep {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    let is_dir_cmd = |w: &str| matches!(w, "cd" | "pushd" | "popd");
-    let Some(pos) = words.iter().position(|w| {
-        is_dir_cmd(w.trim_matches(|c: char| matches!(c, '(' | ')' | '{' | '}' | ';')))
-    }) else {
-        return CdStep::NotCd;
+/// `(after a compound keyword, command word, arguments)` of a directory command.
+type DirCmd<'a> = (bool, &'a str, Vec<&'a str>);
+
+/// The directory command (`cd`/`pushd`/`popd`) a stage runs in command-word
+/// position, with its arguments. `Err` when one hides behind a wrapper
+/// (`builtin cd`, `eval "cd x"`, `xargs cd`): not followed, so undetermined.
+/// Matches PARSED words only, so `git commit -m 'make cd work'` and heredoc
+/// bodies (skipped by [`statements`]) never match.
+fn stage_dir_cmd(stage: &Stage) -> Result<Option<DirCmd<'_>>, String> {
+    let words: Vec<&str> = stage.words.iter().map(String::as_str).collect();
+    let mut i = 0;
+    let mut compound = false;
+    while let Some(w) = words.get(i) {
+        let assignment = w.split_once('=').is_some_and(|(n, _)| {
+            !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if COMPOUND_WORDS.contains(w) {
+            compound = true;
+        } else if !(assignment || matches!(*w, "!" | "time")) {
+            break;
+        }
+        i += 1;
+    }
+    let Some(&cmd) = words.get(i) else {
+        return Ok(None);
     };
-    let unres = |why: &str| CdStep::Unresolvable(format!("`{}`: {why}", text.trim()));
-    if pos != 0 || !matches!(words[0], "cd" | "pushd") {
-        return unres("a directory change that is not a plain statement of its own");
+    if DIR_CMDS.contains(&cmd) {
+        return Ok(Some((compound, cmd, words[i + 1..].to_vec())));
     }
-    let mut args = words[1..].iter().copied();
-    let mut target = args.next();
-    if target == Some("--") {
-        target = args.next();
+    if WRAPPERS.contains(&cmd)
+        && words[i + 1..]
+            .iter()
+            .any(|a| a.split_whitespace().any(|t| DIR_CMDS.contains(&t)))
+    {
+        return Err(format!(
+            "`{cmd}` runs a directory command that is not followed"
+        ));
     }
-    let Some(raw) = target else {
-        return unres("no target (the shell's home directory)");
-    };
-    if args.next().is_some() {
-        return unres("more than one argument");
+    Ok(None)
+}
+
+/// Literal `CDPATH` entries set on the line (`CDPATH=a:b`), `Ok(None)` when
+/// the line never mentions it, `Err` when it is mentioned in a form that is not
+/// a literal assignment (`$CDPATH`, `CDPATH=$X`).
+fn cdpath_entries(stmts: &[Statement], command: &str) -> Result<Option<Vec<String>>, String> {
+    if !command.contains("CDPATH") {
+        return Ok(None);
     }
-    let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | ';'));
-    if w.starts_with('-') || !plain_word(w) {
-        return unres("the target is not a literal path");
+    let mut entries = Vec::new();
+    let mut seen = false;
+    for s in stmts {
+        for w in s.stages.iter().flat_map(|st| st.words.iter()) {
+            if let Some(v) = w.strip_prefix("CDPATH=") {
+                if !plain_word_loose(v) {
+                    return Err("CDPATH is set to a value that is not a literal".to_string());
+                }
+                seen = true;
+                entries.extend(v.split(':').map(str::to_string));
+            } else if w.contains("CDPATH") {
+                return Err("CDPATH is used in a form that is not a literal assignment".to_string());
+            }
+        }
     }
-    let p = Path::new(w);
-    if p.is_absolute() {
-        CdStep::To(p.to_path_buf())
-    } else if let Some(b) = base {
-        CdStep::To(b.join(p))
+    if seen {
+        Ok(Some(entries))
     } else {
-        // No known cwd: the target stays relative. A relative write path
-        // cannot be placed, and callers count it as inside every root
-        // (`donegate::rootcheck::writes_in`): the restrictive side.
-        CdStep::To(p.to_path_buf())
+        Err("CDPATH is mentioned but not assigned a literal value".to_string())
     }
+}
+
+/// [`plain_word`] but a `:`-list is allowed (and an empty value).
+fn plain_word_loose(v: &str) -> bool {
+    !v.chars()
+        .any(|c| "*?[]{}$~!`\\\"'<>|&;()#".contains(c) || c.is_whitespace())
+}
+
+/// Follow the shell's directory through ONE recorded command, statement by
+/// statement, so a relative path is joined with where the shell IS when that
+/// statement runs, not with the transcript line's cwd (a sidechain line
+/// records the PARENT root).
+///
+/// Which directory changes MOVE the cwd (replace it): a plain top-level
+/// `cd <literal>` / `pushd <literal>` that is a statement of its own (one
+/// pipeline stage, no compound keyword before it, not backgrounded, not
+/// followed by `||`), reached unconditionally (first, after `;`/newline, at
+/// the start of a subshell, or after `&&` with only `&&` after it), whose
+/// target is an existing directory. Inside `( ... )` the change lasts to the
+/// closing `)`.
+///
+/// Every other directory change whose target IS a literal (a conditional or
+/// background `cd`, one in a pipeline or after `if`/`{`, one whose target does
+/// not exist, `CDPATH` candidates) does NOT replace the cwd: the shell may or
+/// may not be there, so the candidates are ADDED to the cwd set (the
+/// restrictive side). `popd`, `pushd +N`, `cd -` may return to any directory
+/// the command was in, so the cwd set becomes all of them. A `cd` whose
+/// target is not a literal (`cd`, `cd $X`, `cd ~`), or a directory command
+/// behind a wrapper, is `Err`: undetermined.
+fn walk_cwd(command: &str, stmts: &[Statement], init: Option<&Path>) -> Result<Walk, String> {
+    let cdpath = cdpath_entries(stmts, command)?;
+    let mut cur: Vec<PathBuf> = init.map(|p| vec![p.to_path_buf()]).unwrap_or_default();
+    let mut history: Vec<PathBuf> = cur.clone();
+    let mut stack: Vec<Vec<PathBuf>> = Vec::new();
+    let mut walk = Walk {
+        bases: Vec::new(),
+        entered: Vec::new(),
+    };
+    // rest_and[k]: every separator from statement k on is `&&` (or the end).
+    let rest_and: Vec<bool> = (0..stmts.len())
+        .map(|k| {
+            stmts[k..stmts.len().saturating_sub(1)]
+                .iter()
+                .all(|s| s.post == Sep::And)
+        })
+        .collect();
+    for (k, s) in stmts.iter().enumerate() {
+        walk.bases.push(cur.clone());
+        let pre = if k == 0 { Sep::Seq } else { stmts[k - 1].post };
+        if s.opaque {
+            // A substitution is not parsed: a directory command inside it is
+            // not followed.
+            let text = &command[s.start..s.end];
+            if text
+                .split_whitespace()
+                .any(|t| DIR_CMDS.contains(&t.trim_matches(|c: char| "()`;\"'{}".contains(c))))
+            {
+                return Err(format!(
+                    "`{}` holds a directory command inside a substitution",
+                    text.trim()
+                ));
+            }
+        } else {
+            for stage in &s.stages {
+                let Some((compound, cmd, args)) = stage_dir_cmd(stage)? else {
+                    continue;
+                };
+                let single = s.stages.len() == 1 && !compound;
+                let reached = matches!(pre, Sep::Seq | Sep::Open | Sep::Close)
+                    || (pre == Sep::And && rest_and[k]);
+                let certain = single && reached && !matches!(s.post, Sep::Bg | Sep::Or);
+                // Arguments: skip `--` / `-P` / `-L`; `-` and `+N`/`-N` and
+                // popd go back to a directory seen earlier.
+                let mut args = args
+                    .into_iter()
+                    .filter(|a| !matches!(*a, "--" | "-P" | "-L"));
+                let target = args.next();
+                if args.next().is_some() {
+                    return Err(format!(
+                        "`{cmd}` with more than one argument is not followed"
+                    ));
+                }
+                let rotate = cmd == "popd"
+                    || target == Some("-")
+                    || (cmd == "pushd"
+                        && target.is_none_or(|t| {
+                            (t.starts_with('+') || t.starts_with('-'))
+                                && t.len() > 1
+                                && t[1..].chars().all(|c| c.is_ascii_digit())
+                        }));
+                if rotate {
+                    for h in &history {
+                        if !cur.contains(h) {
+                            cur.push(h.clone());
+                        }
+                    }
+                    continue;
+                }
+                let Some(t) = target else {
+                    return Err(format!(
+                        "`{cmd}` without a target goes to the home directory"
+                    ));
+                };
+                if t.starts_with('-') || !plain_word(t) {
+                    return Err(format!("`{cmd} {t}`: the target is not a literal path"));
+                }
+                let p = Path::new(t);
+                let mut cands: Vec<PathBuf> = Vec::new();
+                if p.is_absolute() {
+                    cands.push(p.to_path_buf());
+                } else if cur.is_empty() {
+                    // No known cwd: the target stays relative; callers count
+                    // a relative write path as inside every root.
+                    cands.push(p.to_path_buf());
+                } else {
+                    for b in &cur {
+                        cands.push(b.join(p));
+                        if let Some(es) = &cdpath {
+                            for e in es {
+                                let e = Path::new(e);
+                                let root = if e.is_absolute() || e.as_os_str().is_empty() {
+                                    if e.as_os_str().is_empty() {
+                                        b.clone()
+                                    } else {
+                                        e.to_path_buf()
+                                    }
+                                } else {
+                                    b.join(e)
+                                };
+                                cands.push(root.join(p));
+                            }
+                        }
+                    }
+                }
+                let existing: Vec<PathBuf> = cands
+                    .iter()
+                    .filter(|c| c.is_relative() || c.is_dir())
+                    .cloned()
+                    .collect();
+                for c in &existing {
+                    walk.entered.push((k, c.clone()));
+                }
+                if certain && !existing.is_empty() {
+                    cur = existing.clone();
+                } else {
+                    for c in cands {
+                        if !cur.contains(&c) {
+                            cur.push(c);
+                        }
+                    }
+                }
+                for c in &cur {
+                    if !history.contains(c) {
+                        history.push(c.clone());
+                    }
+                }
+            }
+        }
+        match s.post {
+            Sep::Open => stack.push(cur.clone()),
+            Sep::Close => {
+                cur = stack
+                    .pop()
+                    .ok_or_else(|| "a `)` with no matching `(`".to_string())?;
+            }
+            _ => {}
+        }
+    }
+    Ok(walk)
+}
+
+/// Words of a statement that may name a path: the parsed words and redirect
+/// targets (quotes removed, a heredoc body is data and absent). A statement
+/// holding a command substitution is not parsed into words, so its raw text is
+/// split on whitespace (over-attribution).
+fn statement_path_words(command: &str, s: &Statement) -> Vec<String> {
+    if s.opaque {
+        return command[s.start..s.end]
+            .split_whitespace()
+            .map(|r| {
+                r.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'))
+                    .to_string()
+            })
+            .collect();
+    }
+    s.stages
+        .iter()
+        .flat_map(|st| st.words.iter().chain(st.redirects.iter()))
+        .cloned()
+        .collect()
+}
+
+/// The `keep` flag of each statement of [`writing_statements`] (before its
+/// heredoc rule): not provably read-only, or a `cd` that a kept statement
+/// follows.
+fn keep_flags(stmts: &[Statement]) -> Vec<bool> {
+    let mut keep: Vec<bool> = stmts
+        .iter()
+        .map(|s| s.opaque || !s.stages.iter().all(read_only_stage))
+        .collect();
+    let mut later_kept = false;
+    for (k, s) in stmts.iter().enumerate().rev() {
+        if later_kept && s.stages.iter().any(|st| program(st) == Some("cd")) {
+            keep[k] = true;
+        }
+        later_kept |= keep[k];
+    }
+    keep
 }
 
 /// The writing statements of one recorded Bash call and the existing paths
@@ -1080,55 +1352,83 @@ fn cd_step(text: &str, base: Option<&Path>) -> CdStep {
 /// whose set is empty wrote through something that names no file (`cargo fmt`,
 /// a glob, a generator, `git checkout`): it is unattributable.
 ///
-/// A relative word is joined with the directory the command is IN at that
-/// point: the transcript line's cwd, replaced by each preceding literal
-/// `cd <dir>` of the same command. A `cd` that cannot be resolved statically
-/// makes the call's targets undetermined: the third field carries the reason
-/// and the caller must not read the set as complete.
+/// A relative word is joined with the directory the shell is in when its
+/// statement runs, as [`walk_cwd`] defines it: the transcript line's cwd,
+/// replaced only by a plain top-level `cd <literal dir>` the shell definitely
+/// stays in, widened (never replaced) by a `cd` that may not have run or
+/// whose directory does not exist. The third field is `Some(reason)` only
+/// when a `cd` cannot be resolved at all (`cd $X`, `cd`, a wrapper); the set
+/// is then not complete and the caller must not read it as such.
 fn call_named_paths(
     call: &crate::transcript::BashCall,
 ) -> (bool, BTreeSet<PathBuf>, Option<String>) {
-    let mut base: Option<PathBuf> = call.cwd.as_deref().map(PathBuf::from);
-    let stmts = writing_statements(&call.command);
     let mut out = BTreeSet::new();
-    for text in &stmts {
-        match cd_step(text, base.as_deref()) {
-            CdStep::NotCd => {}
-            CdStep::Unresolvable(why) => return (true, out, Some(why)),
-            CdStep::To(dir) => {
-                if dir.is_relative() {
-                    out.insert(dir.clone());
-                } else if dir.exists() {
-                    out.insert(resolve(&dir));
-                }
-                base = Some(dir);
-                continue;
-            }
-        }
-        for raw in text.split_whitespace() {
+    let Some(stmts) = statements(&call.command) else {
+        // Not parsed: the whole command is kept, whitespace-split. A
+        // directory command anywhere in it is not followed.
+        let undetermined = call
+            .command
+            .split_whitespace()
+            .any(|t| DIR_CMDS.contains(&t))
+            .then(|| "an unparsed command holds a directory command".to_string());
+        let bases: Vec<PathBuf> = call.cwd.iter().map(PathBuf::from).collect();
+        for raw in call.command.split_whitespace() {
             let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
-            if w.is_empty() || w.starts_with('-') {
-                continue;
-            }
-            let p = Path::new(w);
-            let abs = if p.is_absolute() {
-                p.to_path_buf()
-            } else if let Some(c) = base
-                .as_deref()
-                .filter(|_| w.contains('/') || w.contains('.'))
-            {
-                c.join(p)
-            } else {
-                continue;
-            };
-            if abs.is_relative() {
-                out.insert(abs);
-            } else if abs.exists() {
-                out.insert(resolve(&abs));
-            }
+            insert_named(&mut out, w, &bases);
+        }
+        return (true, out, undetermined);
+    };
+    let walk = match walk_cwd(&call.command, &stmts, call.cwd.as_deref().map(Path::new)) {
+        Ok(w) => w,
+        Err(why) => return (true, out, Some(why)),
+    };
+    let keep = if stmts.iter().any(|s| s.heredoc) {
+        vec![true; stmts.len()]
+    } else {
+        keep_flags(&stmts)
+    };
+    for (k, s) in stmts.iter().enumerate() {
+        if !keep[k] {
+            continue;
+        }
+        for w in statement_path_words(&call.command, s) {
+            insert_named(&mut out, &w, &walk.bases[k]);
         }
     }
-    (!stmts.is_empty(), out, None)
+    for (k, dir) in &walk.entered {
+        if keep[*k] {
+            out.insert(if dir.is_relative() {
+                dir.clone()
+            } else {
+                resolve(dir)
+            });
+        }
+    }
+    (keep.iter().any(|k| *k), out, None)
+}
+
+/// Add the path `w` names to `out`: absolute, or joined with each candidate
+/// directory in `bases` (a relative word with no known directory is skipped,
+/// as before). A relative result cannot be placed and is kept as is.
+fn insert_named(out: &mut BTreeSet<PathBuf>, w: &str, bases: &[PathBuf]) {
+    if w.is_empty() || w.starts_with('-') {
+        return;
+    }
+    let p = Path::new(w);
+    let mut put = |abs: PathBuf| {
+        if abs.is_relative() {
+            out.insert(abs);
+        } else if abs.exists() {
+            out.insert(resolve(&abs));
+        }
+    };
+    if p.is_absolute() {
+        put(p.to_path_buf());
+    } else if w.contains('/') || w.contains('.') {
+        for b in bases {
+            put(b.join(p));
+        }
+    }
 }
 
 /// Whether this session (parent transcript and every subagent sidechain)
@@ -1179,26 +1479,26 @@ fn call_is_unattributable(call: &crate::transcript::BashCall) -> bool {
     let Some(stmts) = statements(&call.command) else {
         return true;
     };
-    let mut base: Option<PathBuf> = call.cwd.as_deref().map(PathBuf::from);
-    for s in &stmts {
+    // A directory command this cannot place makes the call unattributable.
+    let Ok(walk) = walk_cwd(&call.command, &stmts, call.cwd.as_deref().map(Path::new)) else {
+        return true;
+    };
+    for (k, s) in stmts.iter().enumerate() {
         if s.opaque {
             return true;
         }
-        let text = &call.command[s.start..s.end];
-        match cd_step(text, base.as_deref()) {
-            CdStep::NotCd => {}
-            // A write after a directory this cannot place is unattributable.
-            CdStep::Unresolvable(_) => return true,
-            CdStep::To(dir) => {
-                base = Some(dir);
-                continue;
-            }
-        }
+        let bases = &walk.bases[k];
         for stage in &s.stages {
             if read_only_stage(stage) || matches!(program(stage), Some("cd" | "pushd")) {
                 continue;
             }
-            if !stage_attributable(stage, base.as_deref()) {
+            // Attributable only if it is, whichever directory the shell is in.
+            let ok = if bases.is_empty() {
+                stage_attributable(stage, None)
+            } else {
+                bases.iter().all(|b| stage_attributable(stage, Some(b)))
+            };
+            if !ok {
                 return true;
             }
         }

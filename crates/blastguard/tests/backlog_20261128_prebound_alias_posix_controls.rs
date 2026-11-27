@@ -32,6 +32,14 @@ fn without_alias_or_posix_the_confined_value_still_resolves() {
         format!("P={OK}; P=/etc/hosts :; {w}"),
         format!("P={OK}; P=/etc/hosts true; {w}"),
         format!("P={OK}; echo ll; {w}"),
+        // Mentions of the words, and non-enabling option commands, are not
+        // alias / hook / POSIX definitions.
+        format!("P={OK}; set -o posix; P=/etc/hosts true; {w}"),
+        format!(": ${{POSIXLY_CORRECT:=1}}; P={OK}; P=/etc/hosts :; {w}"),
+        format!("echo alias; P={OK}; {w}"),
+        format!("P={OK}; grep alias /home/yuki/proj/x; {w}"),
+        format!("set -euo pipefail; P={OK}; {w}"),
+        format!("emulate -L zsh; P={OK}; {w}"),
     ] {
         let d = scoped(&c);
         assert!(

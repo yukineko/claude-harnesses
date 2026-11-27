@@ -504,8 +504,15 @@ pub(super) fn redirect_target_candidates(
         || place_redirect_target(cmd, seg_idx, seg_cwds, resolved.clone()).is_err();
     if unplaced {
         use super::ast::targets::{resolve, Role};
-        if let Some(paths) = resolve(&raw, Role::RedirectTarget) {
-            return paths;
+        // The evaluator does not model every hook that rebinds a name
+        // (`PS4` with `set -x`, `setopt posix_builtins` with a prefix
+        // assignment, an alias body): on such a line its value is not
+        // believed either (backlog f3301770).
+        let modes = super::vars::shell_modes(cmd);
+        if !modes.alias && !modes.posix {
+            if let Some(paths) = resolve(&raw, Role::RedirectTarget) {
+                return paths;
+            }
         }
     }
     vec![resolved]

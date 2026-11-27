@@ -77,7 +77,7 @@ use super::super::segment::{
 };
 use super::super::vars::{
     defines_shell_function, exemption_disabled, has_unresolvable_expansion, indirect_name_operand,
-    is_shell_identifier, quote_aware_words, segment_mentions_name, tied_partner,
+    is_shell_identifier, quote_aware_words, segment_mentions_name, shell_modes, tied_partner,
     unquote_literal_value,
 };
 use super::super::{
@@ -282,6 +282,11 @@ fn resolve_static_bindings_with_home(cmd: &str, home: Option<&str>) -> String {
 
 fn line_is_ineligible(cmd: &str) -> bool {
     if defines_shell_function(cmd) || cmd.contains("IFS") {
+        return true;
+    }
+    // An alias / hook / sourced code / undetermined command word anywhere on
+    // the line: no earlier binding is believed (backlog f3301770).
+    if shell_modes(cmd).alias {
         return true;
     }
     if quote_aware_words(cmd).iter().any(|w| {

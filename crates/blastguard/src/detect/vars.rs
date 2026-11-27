@@ -652,74 +652,201 @@ pub(super) fn exemption_disabled(cmd: &str) -> bool {
 /// these persists in the shell.
 const POSIX_SPECIAL_BUILTINS: &[&str] = &[
     ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
-    "shift", "times", "trap", "unset", "source",
+    "shift", "times", "trap", "unset", "source", "typeset", "declare", "local", "integer", "float",
 ];
 
 /// What the whole command says about how command words and prefix
-/// assignments behave, read from the parsed command (words after quote
-/// removal) and, where the parse is undetermined, from a word split.
+/// assignments behave, decided from the PARSED command (every simple command,
+/// compound bodies included; words after quote removal, backslash removal and
+/// `$'…'` decoding), never from raw text.
 #[derive(Clone, Copy)]
 pub(super) struct ShellModes {
-    /// An `alias` / `unalias` / alias-table write appears anywhere: a command
-    /// word may run a body that binds any name, so nothing resolves.
+    /// Something on the line may run code that is not the text of the
+    /// statement being read, so NO earlier binding is believed: an `alias` /
+    /// `unalias` / alias-table write, `.` / `source` / `eval`, any `trap` or
+    /// `TRAP*` function, a function named like a trusted non-binder command
+    /// (`echo(){ … }`; other functions are handled by the function-body
+    /// logic), `PS4`, `zle`, or a command
+    /// word whose value is not a determined literal. An undetermined parse
+    /// counts (fail closed).
     pub alias: bool,
-    /// A POSIX-enabling command appears anywhere (`set -o posix`,
-    /// `setopt posix_builtins`, `emulate sh|ksh`, `--posix`,
-    /// `POSIXLY_CORRECT=`).
+    /// POSIX mode may be on (`set -o posix`, `setopt posix_builtins`,
+    /// `unsetopt noposixbuiltins`, `options[posixbuiltins]=`, `emulate sh|ksh`,
+    /// `--posix`, `POSIXLY_CORRECT=`), or an option command has an
+    /// undetermined argument that could enable it. An undetermined parse
+    /// counts.
     pub posix: bool,
 }
 
 pub(super) fn shell_modes(cmd: &str) -> ShellModes {
     use super::ast::{analyze, Analysis, Value};
-    let words: Vec<Vec<String>> = match analyze(cmd) {
-        Analysis::Known(script) => script
-            .commands
-            .iter()
-            .map(|sc| {
-                let mut ws: Vec<String> = sc
-                    .assignments
-                    .iter()
-                    .map(|(n, _)| format!("{n}="))
-                    .collect();
-                ws.extend(sc.argv.iter().map(|w| match &w.value {
-                    Value::Literal(s) => s.clone(),
-                    Value::Undetermined(_) => w.raw.clone(),
-                }));
-                ws
-            })
-            .collect(),
-        // Parse undetermined: a word split, with the statement operators
-        // peeled off (`posix;` is the word `posix`).
-        Analysis::Undetermined(_) => vec![quote_aware_words(cmd)
-            .iter()
-            .flat_map(|w| w.split([';', '&', '|', '(', ')', '\n']).map(str::to_string))
-            .filter(|w| !w.is_empty())
-            .map(|w| unquote_literal_value(&w).unwrap_or(w))
-            .collect()],
-    };
     let mut modes = ShellModes {
         alias: false,
         posix: false,
     };
-    for ws in &words {
-        for (i, w) in ws.iter().enumerate() {
-            let base = w.split('=').next().unwrap_or(w);
-            if matches!(w.as_str(), "alias" | "unalias") || is_command_table_name(base) {
-                modes.alias = true;
-            }
-            let lower = w.to_ascii_lowercase().replace('_', "");
-            if matches!(lower.as_str(), "posix" | "posixbuiltins" | "--posix")
-                || base == "POSIXLY_CORRECT"
-                || (w == "emulate"
-                    && ws[i + 1..]
+    // Each statement is parsed ON ITS OWN: after `alias` / `set -o posix` the
+    // evaluator's state is opaque and the rest of a whole-line analysis turns
+    // `Undetermined`, which would hide the statements that follow. A
+    // statement that does not parse alone (`then …`, `do …`) is read from a
+    // word split with the keywords and operators peeled off, dequoted by
+    // `unquote_literal_value`; a word that does not dequote to a literal is
+    // undetermined.
+    let segs = split_segments_with_separators(cmd);
+    let (is_body, _) = here_document_layout(&segs);
+    for (idx, seg) in segs.iter().enumerate() {
+        if is_body.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        // A function that takes the name of a command the NON_BINDERS
+        // exemption trusts (`echo(){ read P; }`) makes that trust false.
+        // Other function names are covered by the function-body handling.
+        if defined_function_name(&seg.text).is_some_and(|n| NON_BINDERS.contains(&n.as_str())) {
+            modes.alias = true;
+        }
+        match analyze(&seg.text) {
+            Analysis::Known(script) => {
+                for sc in &script.commands {
+                    let assigns: Vec<String> =
+                        sc.assignments.iter().map(|(n, _)| n.clone()).collect();
+                    let words: Vec<(String, bool)> = sc
+                        .argv
                         .iter()
-                        .any(|n| matches!(n.as_str(), "sh" | "ksh")))
+                        .map(|w| match &w.value {
+                            Value::Literal(s) => (s.clone(), true),
+                            Value::Undetermined(_) => (w.raw.clone(), false),
+                        })
+                        .collect();
+                    classify_command(&assigns, &words, &mut modes);
+                }
+            }
+            Analysis::Undetermined(_) => classify_text_statement(&seg.text, &mut modes),
+        }
+    }
+    modes
+}
+
+/// Name defined by a leading `name(){…}` / `function name …` statement.
+fn defined_function_name(text: &str) -> Option<String> {
+    let t = text.trim_start();
+    let t = t.strip_prefix('{').map_or(t, str::trim_start);
+    if let Some(rest) = t.strip_prefix("function") {
+        if rest.starts_with(char::is_whitespace) {
+            let name: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+                .collect();
+            return (!name.is_empty()).then_some(name);
+        }
+    }
+    let name: String = t
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+        .collect();
+    let after = t[name.len()..].trim_start();
+    let inner = after.strip_prefix('(')?.trim_start();
+    inner
+        .starts_with(')')
+        .then_some(name)
+        .filter(|n| !n.is_empty())
+}
+
+/// A statement that did not parse alone, read from its words.
+fn classify_text_statement(text: &str, modes: &mut ShellModes) {
+    const KEYWORDS: &[&str] = &[
+        "then", "do", "else", "elif", "if", "while", "until", "!", "{", "(", "time", "function",
+    ];
+    let mut assigns: Vec<String> = Vec::new();
+    let mut words: Vec<(String, bool)> = Vec::new();
+    for w in quote_aware_words(text) {
+        let w = w.trim_start_matches(['(', '{']).to_string();
+        if w.is_empty() {
+            continue;
+        }
+        if words.is_empty() && KEYWORDS.contains(&w.as_str()) {
+            continue;
+        }
+        if words.is_empty() && is_assignment(&w) {
+            assigns.push(w.split('=').next().unwrap_or(&w).to_string());
+            continue;
+        }
+        match unquote_literal_value(&w) {
+            Some(s) => words.push((s, true)),
+            None => words.push((w, false)),
+        }
+    }
+    classify_command(&assigns, &words, modes);
+}
+
+/// One simple command: its prefix-assignment names and `(word, determined)`
+/// argv. Sets [`ShellModes`] flags (fail closed on an undetermined command
+/// word or an undetermined option argument).
+fn classify_command(assigns: &[String], words: &[(String, bool)], modes: &mut ShellModes) {
+    // brush-parser leaves `name[sub]=v` as a command WORD: it is an
+    // assignment (`options[posixbuiltins]=on`, `BASH_ALIASES[echo]=…`).
+    let mut assigns: Vec<String> = assigns.to_vec();
+    let mut start = 0;
+    while let Some((w, true)) = words.get(start) {
+        let Some(eq) = w.find('=') else { break };
+        let name = w[..eq].trim_end_matches('+');
+        let base = name.split('[').next().unwrap_or(name);
+        if !(is_shell_identifier(base) && (base == name || name.ends_with(']'))) {
+            break;
+        }
+        assigns.push(name.to_string());
+        start += 1;
+    }
+    let words = &words[start..];
+    for n in &assigns {
+        let base = n.split('[').next().unwrap_or(n).trim_end_matches('+');
+        if is_command_table_name(n) || base == "PS4" || base.starts_with("TRAP") {
+            modes.alias = true;
+        }
+        if base == "POSIXLY_CORRECT" || base == "options" {
+            modes.posix = true;
+        }
+    }
+    // Skip the `command` / `builtin` wrappers.
+    let mut i = 0;
+    while words
+        .get(i)
+        .is_some_and(|(s, det)| *det && matches!(s.as_str(), "command" | "builtin"))
+    {
+        i += 1;
+    }
+    let Some((h, det)) = words.get(i) else {
+        return;
+    };
+    if !det {
+        // The command word is not determined: it may be `alias`, `source`,
+        // anything.
+        modes.alias = true;
+        return;
+    }
+    let h = h.as_str();
+    let args = &words[i + 1..];
+    if matches!(
+        h,
+        "alias" | "unalias" | "." | "source" | "eval" | "trap" | "zle" | "autoload" | "functions"
+    ) || is_command_table_name(h)
+        || h.starts_with("TRAP")
+    {
+        modes.alias = true;
+    }
+    if matches!(h, "set" | "setopt" | "unsetopt" | "shopt" | "emulate") {
+        for (s, det) in args {
+            let lower = s.to_ascii_lowercase().replace('_', "");
+            if !det
+                || lower.contains("posix")
+                || (h == "emulate" && matches!(s.as_str(), "sh" | "ksh"))
             {
                 modes.posix = true;
             }
         }
     }
-    modes
+    if words.iter().any(|(s, det)| *det && s == "--posix") {
+        modes.posix = true;
+    }
 }
 
 /// Names whose assignment redefines what a command word means: zsh's

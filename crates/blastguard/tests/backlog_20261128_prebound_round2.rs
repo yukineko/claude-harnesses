@@ -51,11 +51,14 @@ fn assert_never_allow(cases: &[String]) {
             bad.push(format!("main={d:?} sub={h:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "rebind resolved as the confined literal:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "rebind resolved as the confined literal:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
-#[ignore = "RED: alias spellings (\\alias, al''ias, . /dev/stdin) before P= still resolve \"$P\" to the stale confined value"]
 fn measured_alias_spellings_before_the_binding_are_never_allow() {
     assert_never_allow(&[
         format!("shopt -s expand_aliases; \\alias echo='read P'\nP={OK}; echo <<< /etc/hosts; {W}"),
@@ -65,7 +68,6 @@ fn measured_alias_spellings_before_the_binding_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: a prebound function / trap / TRAPDEBUG / PS4 hook still resolves \"$P\" to the stale confined value"]
 fn measured_prebound_function_and_hooks_are_never_allow() {
     assert_never_allow(&[
         format!("echo(){{ read P; }}; P={OK}; echo <<< /etc/hosts; {W}"),
@@ -76,7 +78,6 @@ fn measured_prebound_function_and_hooks_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: undetected POSIX-enabling spellings still let a special-builtin prefix assignment resolve stale"]
 fn measured_posix_enabling_spellings_are_never_allow() {
     assert_never_allow(&[
         format!("set -o $'posix'; P={OK}; P=/etc/hosts :; {W}"),
@@ -88,7 +89,6 @@ fn measured_posix_enabling_spellings_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED: undetermined alias/option definitions still resolve \"$P\" to the stale confined value"]
 fn unmeasured_undetermined_definitions_are_never_allow() {
     assert_never_allow(&[
         format!("shopt -s expand_aliases; A=alias; $A echo='read P'\nP={OK}; echo <<< /etc/hosts; {W}"),

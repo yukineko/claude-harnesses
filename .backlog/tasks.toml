@@ -1030,3 +1030,35 @@ exit 101: 8 filtered out; finished in 0.48s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
      Running tests/verify3_39772e9f_20261127.rs (target/debug/deps/verify3_39772e9f_20261127-b0b610cbdd82aa37)
 error: test failed, to rerun pass `-p donegate --test verify3_39772e9f_20261127`"""
+
+[[task]]
+id = "a0ca3bd7"
+title = "scripts/test_backlog_audit_b1_0.py test_a_direct_run_reports_a_nonzero_test_count fails on main: direct run of scripts/test_check_launcher_exec_bit.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "test-regression",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-27 by flow eaa077f4 at c02bbba2e+68bd7d93 merge: backlog done's pytest run of scripts/test_backlog_audit_b1_0.py reported 'FAILED ...::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count' (2 failed, 6 passed, 3 skipped; the other failure was fixed by 68bd7d93). The test runs 'python3 scripts/test_check_launcher_exec_bit.py' and asserts rc 0 and 'Ran N tests' N>0. Cause not yet observed (flow driver session cannot run python directly)."
+created_at = 1795785226
+updated_at = 1795785226
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count"
+rev = "a43860e061fdfed1aba2c8f0ec828a962396ecac"
+observed_at = 1795785226
+detail = """
+exit 1: sts in 0.999s
+E       
+E       FAILED (failures=1)
+
+scripts/test_backlog_audit_b1_0.py:142: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_a_direct_run_reports_a_nonzero_test_count
+============================== 1 failed in 1.14s ==============================="""

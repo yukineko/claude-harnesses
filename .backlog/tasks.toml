@@ -30,39 +30,6 @@ exit 101: ng condukt v0.7.382 (/Users/yuki/src/.harness-worktrees/session-8cca7e
 error: test failed, to rerun pass `-p condukt --test backlog_scout_20261112_f4_stale_open_runs`"""
 
 [[task]]
-id = "2072023d"
-title = "backlog: shallow clone で履歴が切れると修正済みタスクを next が払い出す問題を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "audit-20261113",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "K4. A git clone --depth 1 hides the non-tip fix commit. RED (verbatim): next in a shallow clone handed out X (83e1e353) although its fix commit (backlog 83e1e353) exists in the full history; expected Y (1360d831) or a refusal. Non-ignored control: full clone with the same copied store hands out Y. A fix may hand out Y or refuse naming shallow/truncated. source: audit 2026-11-13 (condukt run run-20261112-072718-37987 follow-ups; RED committed by run run-20261113-053912-34376, independent writer + verifier). measurement point 09dd0c8c 2026-11-13."
-created_at = 1794516649
-updated_at = 1794516649
-weight = 0.0
-issue_number = 1659
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1659"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_20261113_k4_shallow_clone_fix -- --ignored next_in_shallow_clone_does_not_dispatch_fixed_task"
-rev = "99e1d092f0fe8213c94668b9757b20be93d0a46d"
-observed_at = 1794516649
-detail = """
-exit 101: 
-
-   Compiling backlog v0.3.110 (/Users/yuki/src/.harness-worktrees/session-8cca7ef5/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
-     Running tests/backlog_20261113_k4_shallow_clone_fix.rs (target/debug/deps/backlog_20261113_k4_shallow_clone_fix-870ba509d3c0bcec)
-error: test failed, to rerun pass `-p backlog --test backlog_20261113_k4_shallow_clone_fix`"""
-
-[[task]]
 id = "7a960841"
 title = "blastguard: log テキストで rule 欠落と rule=unknown が同じ表示になる曖昧さを直す"
 project = "/Users/yuki/src/harness"

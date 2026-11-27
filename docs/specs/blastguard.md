@@ -295,6 +295,13 @@ forge・condukt のスケジューラが再利用）。
   `tests/backlog_20261113_bn_shell_stdin_payload.rs`・
   `tests/line_continuation_deny_and_controls_20261113.rs`（system-harm は main・subagent とも Deny、
   無害な行継続コマンドは Allow のまま）。
+- **Python program 内の「名前と演算子だけの式文」は shell としても判定する（backlog 1dad1f35、
+  user 裁定 2026-11-21: system harm は常に Deny）** — `python3 <<'EOF'` の本文 `rm -rf /usr/lib` は
+  `rm - rf / usr / lib` として valid な Python（parse error ではない）で、呼び出しを持たず inert と
+  読まれ Allow になっていた。S5（`detect/ast/s5.rs` `judge_program`）は、progeffect の
+  `bare_operator_statements`（名前・属性・数値・算術演算子だけの expression statement）の原文を
+  shell としても判定し、Allow 以外ならその verdict を返す（raise-only）。parse 不能な本文は従来どおり
+  Ask（subagent では Deny）。呼び出し・代入・文字列を含む正常な Python は影響を受けない。
 - **Python の非 raw 文字列 literal は escape を decode した値でも判定する（backlog 47b20647、
   `detect/interpreter/python_escape.rs` の `decode_non_raw`）** — Python は非 raw literal
   （`'…'`・`"…"`・三重引用・`b''`・`f''`）の中の `\`＋改行を取り除くので、`open('/etc/ho\<LF>sts','w')`

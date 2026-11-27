@@ -121,6 +121,74 @@ pub fn imported_modules(source: &str) -> Result<Vec<String>, String> {
     }
 }
 
+/// The source text of every expression statement that is only names,
+/// attributes, numbers and arithmetic operators (a shell line such as
+/// `ls -la /tmp` parses as `ls - la / tmp`), wherever the statement sits;
+/// `Err(why)` when the program is not read (the refusals of [`analyze`]).
+///
+/// Such a statement computes a value that is discarded and calls nothing, so
+/// as Python it is inert. Real programs do not contain it; shell text pasted
+/// into a Python program does, and this reading cannot tell whether the
+/// author meant it as Python. A host that must not let shell text pass as an
+/// inert program judges these statements' text as shell as well.
+pub fn bare_operator_statements(source: &str) -> Result<Vec<String>, String> {
+    struct Bare<'s> {
+        source: &'s str,
+        found: Vec<String>,
+        failure: Option<String>,
+    }
+    fn only_names_and_operators(e: &rustpython_parser::ast::Expr, ops: &mut usize) -> bool {
+        use rustpython_parser::ast::{Constant, Expr};
+        match e {
+            Expr::Name(_) => true,
+            Expr::Attribute(a) => only_names_and_operators(&a.value, ops),
+            Expr::Constant(c) => matches!(
+                c.value,
+                Constant::Int(_) | Constant::Float(_) | Constant::Complex { .. }
+            ),
+            Expr::BinOp(b) => {
+                *ops += 1;
+                only_names_and_operators(&b.left, ops) && only_names_and_operators(&b.right, ops)
+            }
+            Expr::UnaryOp(u) => {
+                *ops += 1;
+                only_names_and_operators(&u.operand, ops)
+            }
+            _ => false,
+        }
+    }
+    impl walk::Visit for Bare<'_> {
+        fn discarded(&mut self, e: &rustpython_parser::ast::Expr) {
+            use rustpython_parser::ast::Ranged;
+            let mut ops = 0;
+            if only_names_and_operators(e, &mut ops) && ops > 0 {
+                let r = e.range();
+                match self
+                    .source
+                    .get(usize::from(r.start())..usize::from(r.end()))
+                {
+                    Some(t) => self.found.push(t.to_string()),
+                    None => self.fail("a Python statement's text cannot be located".into()),
+                }
+            }
+        }
+        fn fail(&mut self, why: String) {
+            self.failure.get_or_insert(why);
+        }
+    }
+    let (source, body) = parse(source)?;
+    let mut v = Bare {
+        source: &source,
+        found: Vec::new(),
+        failure: None,
+    };
+    walk::module(&mut v, &body);
+    match v.failure {
+        Some(why) => Err(why),
+        None => Ok(v.found),
+    }
+}
+
 /// The normalised source and its parsed body, or why it is not read.
 fn parse(source: &str) -> Result<(String, rustpython_parser::ast::Suite), String> {
     let source = normalise(source)?;

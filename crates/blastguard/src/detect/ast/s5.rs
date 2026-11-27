@@ -515,6 +515,27 @@ fn judge_program(
             return (verdict, None);
         }
     };
+    // Backlog 1dad1f35 (user ruling 2026-11-21: system harm is always Deny):
+    // a statement made only of names and operators (`rm -rf /usr/lib` parses
+    // as `rm - rf / usr / lib`) is valid, inert Python, so the parser proves
+    // nothing about it — but real programs do not contain one, and shell text
+    // pasted into a program does. Its text is also judged as shell, raise-only.
+    match progeffect::python::bare_operator_statements(&p.source) {
+        Ok(stmts) => {
+            for stmt in stmts {
+                let shell = judge(&stmt);
+                if !matches!(shell, Decision::Allow) {
+                    return (shell, None);
+                }
+            }
+        }
+        Err(why) => {
+            return (
+                undetermined(format_args!("the Python program cannot be read: {why}")),
+                None,
+            );
+        }
+    }
     if let Some(why) = shadowed_import(p, text, commands, idx, cmd) {
         return (undetermined(why), None);
     }

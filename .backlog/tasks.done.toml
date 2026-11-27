@@ -96515,3 +96515,63 @@ rev = "5c30ab278fbb981ac65ce84ec10a3755882eb846"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "c7cc67c1"
+title = "blastguard_fp_replay.py: --binary accepts any executable; a silent exit-0 non-blastguard binary (/bin/true) is counted as allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-15 at main a8e92b562 (script from 4d1d74f6c). main() checks --binary only with os.access(X_OK); parse_output reads exit 0 + empty stdout as allow (the hookio Allow shape). Replaying a log through /usr/bin/true therefore turns every replayable record into allow, silently zeroing the FP measurement instead of reporting undetermined (CLAUDE.md s3). Verbatim RED (--runxfail): AssertionError "/usr/bin/true (not blastguard) was accepted as --binary and its silent exit 0 was counted as allow: rc=0 decisions=[allow]". Readings: (a) defect - the measuring stick cannot tell a wrong binary from one that allows everything; (b) operator responsibility to pass the right binary - even then a wrong path silently yields a plausible all-allow result, which is the fail-open shape. DOES NOT PROVE how to identify blastguard (e.g. a --version probe). RED: scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py (xfail strict, commit 4e3c2b396, branch filings/offtopic-20261115).
+flow driver 62e92d16 cannot observe RED: repro 'python3 -m pytest --runxfail ...' is denied in driver sessions and subagents (python -m: Table B.5 Undetermined, script-quarantine ruling). Needs a non-driver session."""
+created_at = 1794746224
+updated_at = 1795785040
+weight = 0.0
+issue_number = 1824
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1824"
+issue_closed_at = 1795785043
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py"
+rev = "4e3c2b39620a9a02f017e343bddf08609510eaf5"
+observed_at = 1794746224
+detail = """
+exit 1: blastguard_fp_replay_non_blastguard_binary_20261115.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py::NonBlastguardBinary::test_silent_exit_zero_non_blastguard_binary_is_not_counted_as_allow
+============================== 1 failed in 0.07s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py scripts/test_blastguard_fp_replay.py"
+exit = 0
+passed = 18
+rev = "5f0c3c8425cb56443e50369d2a1ab2bcf654fcc5"
+observed_at = 1795785037
+output_digest = "sha256:13d1c5636101a1308845a9183386154cec3c9edac94df3c29db02a5368703497"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-eaa077f4
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 18 items
+
+scripts/test_blastguard_fp_replay_non_blastguard_binary_20261115.py .    [  5%]
+scripts/test_blastguard_fp_replay.py .................                   [100%]
+
+============================== 18 passed in 1.99s ==============================
+"""
+
+[task.closure.red]
+rev = "5fe24fc56c9c260d845ae3038f1215b2f915e47d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

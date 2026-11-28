@@ -876,3 +876,34 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 7.05s
      Running tests/verifier11_ask_learning_20261128.rs (target/debug/deps/verifier11_ask_learning_20261128-2395f21d7e5d9792)
 error: test failed, to rerun pass `-p blastguard --test verifier11_ask_learning_20261128`"""
+
+[[task]]
+id = "9c16942b"
+title = "blastguard detector Allows git clean -fdx in a worktree redirected by core.worktree (cleans another tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed by verifier12 (2026-11-28): git clean -fdx in an own worktree whose core.worktree points elsewhere is detector Allow, so it cleans the redirected tree. Test: crates/blastguard/tests/verifier12_ask_learning_20261128.rs::r12_detector_clean_in_redirected_own_worktree_is_allow. Related to 5bef2229. Not covered by the 2026-11-28 rulings."
+created_at = 1795857068
+updated_at = 1795857068
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier12_ask_learning_20261128 r12_detector_clean_in_redirected_own_worktree_is_allow -- --ignored --exact"
+rev = "cc542eaf4981bd9139de208c226a09f8b3c52446"
+observed_at = 1795857068
+detail = """
+exit 101:  `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.95s
+     Running tests/verifier12_ask_learning_20261128.rs (target/debug/deps/verifier12_ask_learning_20261128-2a558c449cc35e1c)
+error: test failed, to rerun pass `-p blastguard --test verifier12_ask_learning_20261128`"""

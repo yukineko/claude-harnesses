@@ -125,7 +125,7 @@ impl Facts {
         self.system_harm
     }
 
-    /// The class label a rule file spells: the shape-schema tag `s3-` removed.
+    /// The class label a rule file spells: the shape-schema tag `s4-` removed.
     pub(crate) fn class_label(&self) -> &'static str {
         class_label(self.class)
     }
@@ -133,7 +133,7 @@ impl Facts {
 
 /// `TargetClass` as a rule file spells it (no schema tag).
 pub(crate) fn class_label(c: TargetClass) -> &'static str {
-    c.as_str().trim_start_matches("s3-")
+    c.as_str().trim_start_matches("s4-")
 }
 
 /// What the rules say about an `Ask`.

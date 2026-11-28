@@ -26,7 +26,7 @@ use harness_core::asklearn::{LearnedTable, Verdict};
 use regex::Regex;
 use std::path::Path;
 
-/// The class labels a rule file may spell (the shape tag `s3-` removed).
+/// The class labels a rule file may spell (the shape tag `s4-` removed).
 const CLASS_LABELS: &[&str] = &[
     "worktree",
     "scratchpad",
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn class_labels_match_the_shape_schema() {
         for l in CLASS_LABELS {
-            let c = TargetClass::parse(&format!("s3-{l}")).unwrap();
+            let c = TargetClass::parse(&format!("s4-{l}")).unwrap();
             assert_eq!(class_label(c), *l);
         }
     }

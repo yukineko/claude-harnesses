@@ -156,7 +156,7 @@ fn wrapper_git_write_keeps_repo_class_main_tree() {
     ] {
         let k = key(&e, &bash(MAIN, cmd));
         assert!(
-            k.contains("|s3-main-tree|"),
+            k.contains("|s4-main-tree|"),
             "wrapper `{cmd}` in the main tree must be class s3-main-tree: {k}"
         );
     }
@@ -217,7 +217,7 @@ fn git_c_core_worktree_is_not_worktree_class() {
         &bash(WT, &format!("git -c core.worktree={MAIN} add -A")),
     );
     assert!(
-        !k.contains("|s3-worktree|") && !k.contains("|s3-none|"),
+        !k.contains("|s4-worktree|") && !k.contains("|s4-none|"),
         "`git -c core.worktree=<main>` must not take the worktree class: {k}"
     );
 }
@@ -238,7 +238,7 @@ fn scratchpad_symlink_to_main_tree_is_main_tree() {
     let link_s = link.to_str().unwrap();
     let k = key(&e, &bash(link_s, "git add -A"));
     assert!(
-        k.contains("|s3-main-tree|"),
+        k.contains("|s4-main-tree|"),
         "cwd {link_s} -> {MAIN} is the main tree, shape says {k}"
     );
     assert_no_ride_e(

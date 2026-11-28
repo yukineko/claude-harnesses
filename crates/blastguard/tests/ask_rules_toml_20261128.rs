@@ -164,7 +164,7 @@ fn ask_shape(e: &Env, payload: &Value) -> (String, String, String) {
     let key = v["shape"].as_str().unwrap();
     let mut it = key.splitn(3, '|');
     let rule = it.next().unwrap().to_string();
-    let class = it.next().unwrap().trim_start_matches("s3-").to_string();
+    let class = it.next().unwrap().trim_start_matches("s4-").to_string();
     let verbs = it.next().unwrap().to_string();
     (rule, class, verbs)
 }

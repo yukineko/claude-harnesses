@@ -406,7 +406,7 @@ fn short_cluster(s: &str, flags: &mut BTreeSet<String>) {
 ///   directly executed script `./run.sh`) adds the hash of its content (see
 ///   [`file_program_token`]; heredoc written earlier on the line wins), a
 ///   wrapper keeps the wrapped tool's subcommand, and `xargs` / `$(..)`
-///   operands add `?` (schema `s3-`).
+///   operands add `?` (schema `s4-`).
 /// * a git write whose repository is not determined adds `?`.
 fn verb_token(
     cmd: &SimpleCommand,
@@ -496,6 +496,27 @@ fn verb_token(
     // at run time. Neither is in the key, so the shape must never be Allow.
     if base == "xargs" || all.substituted {
         unpinned = true;
+    }
+    // A tool the Allow gate does not model (and so every wrapper, a directly
+    // executed script `./run.sh`, `fish` / `pwsh` files) runs something this
+    // key does not pin: `?`. The ONE table is `askrules::MODELLED_TOOLS`.
+    if !crate::askrules::MODELLED_TOOLS
+        .iter()
+        .any(|(t, _)| *t == base)
+    {
+        unpinned = true;
+    }
+    // `sh -c ./run.sh`: the body hash is of the text, not of the file it runs.
+    let runs_shell = cmd.argv.iter().any(|w| {
+        matches!(&w.value, Value::Literal(s)
+            if ["sh", "bash", "zsh", "dash", "ksh", "fish"].contains(&s.rsplit('/').next().unwrap_or(s)))
+    });
+    if let (true, Some(ProgramSource::InlineLiteral(body))) = (runs_shell, program_source(cmd)) {
+        let first = body.split_whitespace().next().unwrap_or("");
+        let single_word = body.split_whitespace().nth(1).is_none();
+        if first.contains('/') || single_word {
+            unpinned = true;
+        }
     }
     if unpinned {
         parts.push(UNRESOLVED_VERB.to_string());

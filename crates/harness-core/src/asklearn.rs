@@ -71,7 +71,7 @@ pub enum TargetClass {
 impl TargetClass {
     /// The class segment of the shape key. Distinct, separator-free.
     ///
-    /// Every label carries the SHAPE-SCHEMA tag `s3-` (user ruling
+    /// Every label carries the SHAPE-SCHEMA tag `s4-` (user ruling
     /// 2026-11-28; schema 2 = verbs with subcommand / flags / body hash and
     /// protected config raised from the verdict; schema 3 = file-script
     /// content hash, wrapper subcommands, unpinned xargs / `$(..)` operands,
@@ -83,28 +83,28 @@ impl TargetClass {
     /// of what a shape means.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TargetClass::Worktree => "s3-worktree",
-            TargetClass::Scratchpad => "s3-scratchpad",
-            TargetClass::ProtectedConfig => "s3-protected-config",
-            TargetClass::System => "s3-system",
-            TargetClass::MainTree => "s3-main-tree",
-            TargetClass::Home => "s3-home",
-            TargetClass::Undetermined => "s3-undetermined",
-            TargetClass::None => "s3-none",
+            TargetClass::Worktree => "s4-worktree",
+            TargetClass::Scratchpad => "s4-scratchpad",
+            TargetClass::ProtectedConfig => "s4-protected-config",
+            TargetClass::System => "s4-system",
+            TargetClass::MainTree => "s4-main-tree",
+            TargetClass::Home => "s4-home",
+            TargetClass::Undetermined => "s4-undetermined",
+            TargetClass::None => "s4-none",
         }
     }
 
     /// Inverse of [`TargetClass::as_str`].
     pub fn parse(s: &str) -> Option<TargetClass> {
         Some(match s {
-            "s3-worktree" => TargetClass::Worktree,
-            "s3-scratchpad" => TargetClass::Scratchpad,
-            "s3-protected-config" => TargetClass::ProtectedConfig,
-            "s3-system" => TargetClass::System,
-            "s3-main-tree" => TargetClass::MainTree,
-            "s3-home" => TargetClass::Home,
-            "s3-undetermined" => TargetClass::Undetermined,
-            "s3-none" => TargetClass::None,
+            "s4-worktree" => TargetClass::Worktree,
+            "s4-scratchpad" => TargetClass::Scratchpad,
+            "s4-protected-config" => TargetClass::ProtectedConfig,
+            "s4-system" => TargetClass::System,
+            "s4-main-tree" => TargetClass::MainTree,
+            "s4-home" => TargetClass::Home,
+            "s4-undetermined" => TargetClass::Undetermined,
+            "s4-none" => TargetClass::None,
             _ => return Option::None,
         })
     }

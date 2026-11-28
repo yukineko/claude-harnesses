@@ -111,6 +111,20 @@ fn high_blast_git_force_push(rest: &[&str]) -> Option<Decision> {
 already on the remote — this rewrites shared history",
         ));
     }
+    // Remote-branch deletion is irreversible and no weaker than a force push:
+    // `--delete`, `-d` (also bundled short flags), or an empty-source refspec
+    // (`:branch`, `:refs/heads/branch`).
+    let deletes = tail.iter().any(|t| *t == "--delete")
+        || has_short(tail, 'd')
+        || tail
+            .iter()
+            .any(|t| !t.starts_with('-') && t.starts_with(':'));
+    if deletes {
+        return Some(Decision::ask(
+            "`git push` that deletes a remote branch/ref (--delete, -d, or a `:ref` refspec) \
+is irreversible for everyone sharing the remote",
+        ));
+    }
     if let Some(refspec) = tail.iter().find(|t| refspec_source_is_force(t)) {
         return Some(Decision::ask(format!(
             "`git push` refspec `{refspec}` has a leading `+` on its source side, which forces \

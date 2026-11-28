@@ -843,3 +843,36 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 19.10s
      Running tests/verifier16_ask_learning_20261128.rs (target/debug/deps/verifier16_ask_learning_20261128-89c90469bf8f4ef2)
 error: test failed, to rerun pass `-p blastguard --test verifier16_ask_learning_20261128`"""
+
+[[task]]
+id = "5bef2229"
+title = "blastguard detector Allows git config core.worktree <main> (redirects worktree to main tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed by verifier11 (2026-11-28): git config core.worktree <main> is detector Allow; it lets later git ops (clean/checkout) act on the main tree. Test: crates/blastguard/tests/verifier11_ask_learning_20261128.rs::r11_detector_git_config_core_worktree_is_allow. Not covered by the container-ok or worktree-removal rulings of 2026-11-28."
+created_at = 1795857027
+updated_at = 1795857027
+weight = 0.0
+issue_number = 2028
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2028"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier11_ask_learning_20261128 r11_detector_git_config_core_worktree_is_allow -- --ignored --exact"
+rev = "e9a2a20e8f680417eef074637e2c11cd6f4825f9"
+observed_at = 1795857027
+detail = """
+exit 101:  `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.05s
+     Running tests/verifier11_ask_learning_20261128.rs (target/debug/deps/verifier11_ask_learning_20261128-2395f21d7e5d9792)
+error: test failed, to rerun pass `-p blastguard --test verifier11_ask_learning_20261128`"""

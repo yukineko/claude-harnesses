@@ -22,7 +22,8 @@
 //! What these tests do NOT prove: that the learner (overwatch) writes the
 //! table blastguard reads (see crates/overwatch/tests/ask_learn_*.rs); that
 //! the target-class classification is right for any path class other than
-//! the ones exercised (Undetermined via `rm "$f"`, a shell rc file, and a
+//! the ones exercised (Undetermined via `rm "$f"`, Worktree via
+//! `LEARNABLE_CMD` for the learned-Allow tests, a shell rc file, and a
 //! system path); that learned decisions survive approval memory / the repeat
 //! ledger (those are isolated away here).
 
@@ -37,6 +38,50 @@ use std::process::{Command, Stdio};
 /// `b_main_session_ask_records_decision_kind_ask` pins it); hardened to Deny
 /// in a subagent.
 const ASK_CMD: &str = r#"rm "$f""#;
+/// An Ask whose shape IS Allow-eligible under the positive allow-list
+/// (askrules/builtin.rs: class `worktree`, `git` with the modelled subcommand
+/// `add`, no `?`). `ASK_CMD` is `s4-undetermined` and can never be
+/// learned-Allowed any more, so the tests of the learned ALLOW path use this
+/// one (re-anchored 2026-11-28 by the round-5 verifier; observed shape
+/// `git-whole-tree-stage|s4-worktree|git add -A`, Ask without a table,
+/// hardened to Deny in a subagent; every test re-checks the Ask as a control).
+///
+/// `LEARNABLE_CMD` runs with the returned cwd: a linked git worktree created
+/// in a fresh tempdir under `/private/tmp/claude-askrules`
+/// (`std::env::temp_dir()` is under `/var/folders`, classed `system`). A
+/// scratchpad `rm -rf` was tried first and rejected: with this file's HOME
+/// (under `$TMPDIR`) the detector Allows it, so it is no Ask here.
+const LEARNABLE_CMD: &str = "git add -A";
+
+fn learnable() -> (tempfile::TempDir, String) {
+    std::fs::create_dir_all("/private/tmp/claude-askrules").unwrap();
+    let d = tempfile::Builder::new()
+        .prefix("contract-learnable-")
+        .tempdir_in("/private/tmp/claude-askrules")
+        .unwrap();
+    let main = d.path().join("repo");
+    std::fs::create_dir_all(&main).unwrap();
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(&main)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "i"]);
+    let wt = d.path().join("wt");
+    git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
+    let cwd = wt.to_str().unwrap().to_string();
+    (d, cwd)
+}
 /// System harm: Deny everywhere.
 const HARM_CMD: &str = "rm -rf /etc";
 
@@ -278,7 +323,19 @@ fn shape_subcommand_is_not_affected_by_the_table() {
 #[test]
 fn learned_allow_turns_ask_into_allow_in_main() {
     let e = env("allow-main");
-    let p = bash("/tmp/x", ASK_CMD, None);
+    let (_fx, cwd) = learnable();
+    let p = bash(&cwd, LEARNABLE_CMD, None);
+    let none = e.root.join("no-table.json");
+    // Control: without the table the same payload is an Ask.
+    let ctl = hook(&e, &none, &p);
+    assert_eq!(
+        printed(&ctl),
+        "ask",
+        "fixture drift: stdout={} stderr={} shape={}",
+        ctl.stdout,
+        ctl.stderr,
+        shape_of(&e, &none, &p)
+    );
     let key = key_of(&e, &p);
     let t = write_table(&e, "t.json", json!([entry(&key, "allow", 7, 0, 4)]));
     let r = hook(&e, &t, &p);
@@ -296,11 +353,16 @@ fn learned_allow_turns_ask_into_allow_in_main() {
 fn learned_allow_applies_in_subagent_mode() {
     let e = env("allow-sub");
     let none = e.root.join("no-table.json");
-    let sub = bash("/tmp/x", ASK_CMD, Some("agent-1"));
-    // Control: today a subagent Ask is hardened to Deny.
+    let (_fx, cwd) = learnable();
+    let sub = bash(&cwd, LEARNABLE_CMD, Some("agent-1"));
+    // Control: the main-session verdict is an Ask (so the subagent Deny below
+    // is the hardening of an Ask, not a detector Deny) ...
+    let main = hook(&e, &none, &bash(&cwd, LEARNABLE_CMD, None));
+    assert_eq!(printed(&main), "ask", "fixture drift: {}", main.stdout);
+    // ... and today a subagent Ask is hardened to Deny.
     let ctl = hook(&e, &none, &sub);
     assert_eq!(printed(&ctl), "deny", "fixture drift: {}", ctl.stdout);
-    let key = key_of(&e, &bash("/tmp/x", ASK_CMD, None));
+    let key = key_of(&e, &bash(&cwd, LEARNABLE_CMD, None));
     let t = write_table(&e, "t.json", json!([entry(&key, "allow", 7, 0, 4)]));
     let r = hook(&e, &t, &sub);
     assert_eq!(
@@ -334,7 +396,13 @@ fn learned_deny_turns_ask_into_deny() {
 #[test]
 fn learned_allow_is_logged_with_shape_and_kind() {
     let e = env("allow-log");
-    let p = bash("/tmp/x", ASK_CMD, None);
+    let (_fx, cwd) = learnable();
+    let p = bash(&cwd, LEARNABLE_CMD, None);
+    // Control (in its own sandbox, so this test's block log only holds the
+    // learned run): without the table the same payload is an Ask.
+    let c = env("allow-log-ctl");
+    let ctl = hook(&c, &c.root.join("no-table.json"), &p);
+    assert_eq!(printed(&ctl), "ask", "fixture drift: {}", ctl.stdout);
     let key = key_of(&e, &p);
     let t = write_table(&e, "t.json", json!([entry(&key, "allow", 7, 0, 4)]));
     let r = hook(&e, &t, &p);
@@ -350,7 +418,7 @@ fn learned_allow_is_logged_with_shape_and_kind() {
     assert_eq!(rec["decision_kind"], "learned", "{rec}");
     assert_eq!(rec["original_decision"], "ask", "{rec}");
     assert_eq!(rec["shape"], key.as_str(), "{rec}");
-    assert_eq!(rec["command"], ASK_CMD, "{rec}");
+    assert_eq!(rec["command"], LEARNABLE_CMD, "{rec}");
     let why = rec["reason"].as_str().unwrap_or("");
     assert!(
         why.contains("approved 7 times across 4 sessions, 0 declines") && why.contains(&key),

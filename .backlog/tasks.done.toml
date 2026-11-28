@@ -99741,3 +99741,79 @@ rev = "cf33a5b2c66a2548150cdc863337cef6bd8f53a4"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3de4729f"
+title = "blastguard FP: 'rsync' inside a quoted jq filter / git commit message makes an unmodelled relinker and Asks a literal redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''
+Observed 2026-11-21 (main 366eab917, session c1b3e891, ~/.blastguard/blocks/blocks.jsonl). Reasons verbatim: (1) "'> …/scratchpad/vh.json': `jq '.tasks[0].title=\"fix rsync\" | …' decomp.routed.json` may create or rename an entry on this path and is not modelled, so blastguard cannot tell which file the write really lands on" (2) "'> /Users/yuki/.condukt/worktrees/run-20261121-091940-12305-t1/crates/blastguard/tests/rsync_protected_destination_20261121.rs': `git commit -qm \"blastguard: RED tests for rsync protected destination\" --trailer \"Condukt-Task: $TASK_ID\"` may create or rename an entry on this path and is not modelled". Mechanism (read from src/detect/relink.rs parse/is_relink_word/mentions): the WORD rsync inside a quoted argument (jq filter string, commit message) makes the segment Parsed::Unmodelled; mentions() then fires on any glob metachar ([0]) or unresolvable expansion ($TASK_ID) anywhere in the command, regardless of the target; a later segment counts whenever any segment holds the bare word 'done' (here a comment in the heredoc body). RED at 62c62ad5e (2026-11-21): all 3 jq shapes and both commit shapes Ask with the same reason; controls pass (ditto src vh.json in a loop stays Ask; heredoc-to-/etc/hosts + commit stays Deny). Readings: (a) FP — jq <filter> <file> and git commit -m <msg> --trailer <t> (no pathspec) cannot create/rename the target; their rsync is data, not an argv word naming a path or a relinking program. (b) intended — unmodelled command naming a relink verb is undetermined → Ask. How to tell: whether the unmodelled command's argv can NAME the target path (an operand equal/resolving to it, or a glob/expansion in an OPERAND position); here the glob/expansion sits inside a jq filter string / --trailer value, so (a). Related fail-open filed separately (same relink path masks an /etc/hosts Deny).
+2026-11-22 flow batch11 (run-20261122-003446-4871/t1): fix 6ae4643d7 on branch condukt/run-20261122-003446-4871/t1 (blastguard 0.2.900) turns RED 2 failed -> GREEN 4 passed at base f9bb4b9aa, controls kept, base-vs-tip on 33 suites: 8 failed -> 4 failed (4 are pre-existing base reds). NOT merged: 4th independent verifier FAILED by code reading (not executed): assignment-only commands are treated as data, so PATH[0]=./bin (bash), zsh path[1]= / functions[cat]= / commands[cat]= / aliases[x]=, or assigning an exported EDITOR/GIT_EDITOR then git commit without -m may rename the program. RULING NEEDED: (1) assignment-only commands never count as data (strictest; then RED row 1 'S=dir; cd $S && ... jq ...' stays Ask and needs a re-anchor ruling), (2) allow only unsubscripted identifiers not on a dangerous-name list (denylist), (3) other. Also open: relink.rs docstrings (names_relink_verb, line_is_relink_data) disagree with code; control test module doc cites nonexistent names_resolve_plainly. Branch kept unmerged pending the ruling.'''
+created_at = 1795221713
+updated_at = 1795882854
+weight = 0.0
+issue_number = 1940
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1940"
+issue_closed_at = 1795882858
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp"
+rev = "52ab15a5ce35b4e6606bc494553d494eca382bd1"
+observed_at = 1795221713
+detail = """
+exit 101:  0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/backlog_20261121_unmodelled_cmd_redirect_target_fp.rs (target/debug/deps/backlog_20261121_unmodelled_cmd_redirect_target_fp-43b5b64bb56ac973)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261121_unmodelled_cmd_redirect_target_fp"
+exit = 0
+passed = 5
+rev = "0c80188de19b1ef8d0d09f8ccb195c85b832f89f"
+observed_at = 1795882853
+output_digest = "sha256:ba7a13643eadce474709e1d720cd624774d778560c4a686a061d00f26e439c0d"
+excerpt = """
+
+running 5 tests
+test jq_filter_naming_rsync_does_not_relink_literal_redirect_target ... ok
+test git_commit_message_naming_rsync_does_not_relink_heredoc_target ... ok
+test control_same_shapes_into_etc_hosts_stay_deny ... ok
+test assignment_only_command_is_never_data_so_jq_rsync_row_is_not_allow ... ok
+test control_unmodelled_relinker_naming_target_stays_ask ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_20261121_unmodelled_cmd_redirect_target_fp.rs (target/debug/deps/backlog_20261121_unmodelled_cmd_redirect_target_fp-23fc19db6b810121)
+"""
+
+[task.closure.red]
+rev = "ce902c3bf321493552a6a87f5445e8cf70d44d8d"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

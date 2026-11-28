@@ -101,8 +101,10 @@ impl GitLayout {
         }
         let main_tree = self.common_dir.parent()?;
         let container = self.toplevel.parent()?;
+        // A HOME that is not an absolute path (empty, relative) disables (c):
+        // `canonicalize` would resolve it against the hook process cwd.
         let canon_home = home
-            .filter(|h| !h.is_empty())
+            .filter(|h| Path::new(h).is_absolute())
             .and_then(|h| std::fs::canonicalize(h).ok());
         let in_container = main_tree
             .parent()
@@ -442,6 +444,10 @@ pub fn class_of_path(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
 /// longest existing prefix equals the spelling byte for byte (so no symlink on
 /// the way and no case difference).
 fn spelling_is_real(raw: &str, abs: &str, real: &str) -> bool {
+    // `/tmp` is accepted as the spelling of `/private/tmp` (and only that
+    // symlink): judged as the path it stands for.
+    let aliased = tmp_alias(abs);
+    let abs = aliased.as_deref().unwrap_or(abs);
     // Compared component by component and byte for byte (`.` and repeated
     // slashes are no difference; a case or symlink difference is).
     !raw.split('/').any(|c| c == "..")
@@ -449,6 +455,21 @@ fn spelling_is_real(raw: &str, abs: &str, real: &str) -> bool {
             .components()
             .eq(std::path::Path::new(abs).components())
         && no_symlink_component(abs)
+}
+
+/// `abs` spelled with `/private/tmp` when it starts with `/tmp` and `/tmp`
+/// really is the symlink to `/private/tmp` (never any other target).
+fn tmp_alias(abs: &str) -> Option<String> {
+    if abs != "/tmp" && !abs.starts_with("/tmp/") {
+        return None;
+    }
+    let rest = &abs["/tmp".len()..];
+    (std::fs::canonicalize("/tmp").ok()? == Path::new("/private/tmp")
+        && std::fs::symlink_metadata("/tmp")
+            .ok()?
+            .file_type()
+            .is_symlink())
+    .then(|| format!("/private/tmp{rest}"))
 }
 
 /// Whether no component of `abs` is a symlink (dangling or not): each prefix
@@ -544,15 +565,13 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     if crate::deletion::is_system_path(&norm) || crate::scope::is_inside_system_dir(&norm) {
         return TargetClass::System;
     }
-    // Round 10: Worktree is "strictly inside THE linked-worktree checkout this
-    // session's cwd belongs to" and nothing else: another session's linked
-    // worktree, a checkout's own root and the storage container
-    // (`.harness-worktrees/`, `~/.condukt/worktrees/<run>`) are not Worktree
+    // User ruling 2026-11-28 ("inside the container is fine"): Worktree is
+    // "strictly inside a real linked-worktree checkout that sits directly in a
+    // fixed container" -- ANY session's, the cwd need not be in it. A
+    // checkout's own root and the storage container itself are not Worktree
     // (they fall to Home / Undetermined below, never Allow-eligible).
-    if let Some(root) = cwd_linked_root(ctx) {
-        if strictly_inside_checkout(&norm, &root, ctx) {
-            return TargetClass::Worktree;
-        }
+    if containing_linked_root(&norm, ctx).is_some() {
+        return TargetClass::Worktree;
     }
     // The session's own tree (the payload cwd). Being under the cwd places
     // nothing: the class is the KIND of tree the cwd is (spec Components 1):
@@ -575,29 +594,15 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     TargetClass::Undetermined
 }
 
-/// The checkout root of the linked worktree the session's cwd belongs to, or
-/// `None` when git does not say the cwd is inside a linked worktree (a main
-/// tree, no git tree, a redirected work tree, a failed probe, no cwd).
-fn cwd_linked_root(ctx: &Ctx<'_>) -> Option<PathBuf> {
-    let c = crate::exclude::normalize(ctx.cwd?);
-    if !c.starts_with('/') {
-        return None;
-    }
-    git_layout(&realpath(&c), ctx)?.linked_root(ctx.home)
-}
-
-/// Whether `abs` lies STRICTLY inside the checkout `root`: below it, not the
-/// root itself, and git says the directory it is in belongs to that very
-/// linked checkout (a submodule's or another checkout nested below is a
-/// different tree).
-fn strictly_inside_checkout(abs: &str, root: &Path, ctx: &Ctx<'_>) -> bool {
-    let p = Path::new(abs.trim_end_matches('/'));
-    p != root
-        && p.starts_with(root)
-        && git_layout(abs, ctx)
-            .and_then(|l| l.linked_root(ctx.home))
-            .as_deref()
-            == Some(root)
+/// The checkout root of the container linked worktree `abs` lies STRICTLY
+/// inside (below it, not the root itself), as git says for the directory `abs`
+/// is in (a submodule's or another checkout nested below is a different tree).
+/// `None` for everything else. The session's cwd is not consulted.
+fn containing_linked_root(abs: &str, ctx: &Ctx<'_>) -> Option<PathBuf> {
+    let real = realpath(abs);
+    let p = Path::new(real.trim_end_matches('/'));
+    let root = git_layout(&real, ctx)?.linked_root(ctx.home)?;
+    (p != root && p.starts_with(&root)).then_some(root)
 }
 
 /// The absolute, normalised spelling of `raw` (as [`class_of_path`] reads it),
@@ -634,8 +639,8 @@ fn absolute_of(raw: &str, ctx: &Ctx<'_>) -> Option<String> {
 /// there is never Allow-eligible: the repository git uses from a scratchpad
 /// may be any other one; `rm` / file tools there stay `Scratchpad`, which
 /// [`class_of_path`] judges from the path alone). Every other tree is git's own answer
-/// ([`GitLayout`]): only the linked worktree the session's cwd belongs to is
-/// `Worktree` (a worktree storage path is not); the main working tree is
+/// ([`GitLayout`]): a real linked worktree directly in a fixed container (any
+/// session's; a worktree storage path is not) is `Worktree`; the main working tree is
 /// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything git did not
 /// answer, or answered as something else, is `Undetermined`.
 pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
@@ -670,15 +675,15 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     }
     // The repository's kind is git's answer, never a substring of the
     // spelling (the `.harness-worktrees/` container is no repository). Only
-    // the linked worktree the session's cwd belongs to is `Worktree` (the
-    // repository IS that checkout, root included, unlike a path target);
-    // another linked worktree is `Undetermined`.
+    // a container linked worktree is `Worktree` (the repository IS that
+    // checkout, root included, unlike a path target); any other linked tree
+    // is `Undetermined`.
     let placed = match git_layout(&real, ctx) {
         None => TargetClass::Undetermined,
         Some(l) if l.is_main() => TargetClass::MainTree,
-        Some(l) => match (l.linked_root(ctx.home), cwd_linked_root(ctx)) {
-            (Some(root), Some(own)) if root == own => TargetClass::Worktree,
-            _ => TargetClass::Undetermined,
+        Some(l) => match l.linked_root(ctx.home) {
+            Some(_) => TargetClass::Worktree,
+            None => TargetClass::Undetermined,
         },
     };
     // Only the Allow-eligible class needs the spelling to be the real path.

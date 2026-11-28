@@ -15,7 +15,7 @@
 //! repository (directory = main working tree, gitlink file = linked
 //! worktree); an unreadable one is `Undetermined`.
 
-use crate::scope::{Placement, SafeRoots};
+use crate::scope::SafeRoots;
 use harness_core::asklearn::{Shape, TargetClass, UNRESOLVED_VERB};
 use harness_core::verdict::Determination;
 
@@ -315,36 +315,27 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     if crate::deletion::is_system_path(&norm) || crate::scope::is_inside_system_dir(&norm) {
         return TargetClass::System;
     }
-    // Round 9: Worktree is "strictly inside one linked-worktree checkout"
-    // (git's own linked-worktree answer), never a substring of the spelling:
-    // the storage container `.harness-worktrees/` and a checkout's own root
-    // are not inside a checkout.
-    if strictly_inside_linked_checkout(&norm) {
-        return TargetClass::Worktree;
-    }
-    if matches!(
-        ctx.scope.classify_worktree(&norm, ctx.cwd),
-        Determination::Known(Placement::Inside { .. })
-    ) {
-        return TargetClass::Worktree;
+    // Round 10: Worktree is "strictly inside THE linked-worktree checkout this
+    // session's cwd belongs to" and nothing else: another session's linked
+    // worktree, a checkout's own root and the storage container
+    // (`.harness-worktrees/`, `~/.condukt/worktrees/<run>`) are not Worktree
+    // (they fall to Home / Undetermined below, never Allow-eligible).
+    if let Some(root) = cwd_linked_root(ctx) {
+        if strictly_inside_checkout(&norm, &root) {
+            return TargetClass::Worktree;
+        }
     }
     // The session's own tree (the payload cwd). Being under the cwd places
     // nothing: the class is the KIND of tree the cwd is (spec Components 1):
-    // a linked worktree is Worktree, a main working tree is MainTree (never
-    // Allow), and a cwd that is no git tree (`~/.claude`, `~/src`, `$HOME`)
-    // gives no class here, so the path falls to Home / Undetermined below.
+    // a main working tree is MainTree (never Allow), and a cwd that is no git
+    // tree (`~/.claude`, `~/src`, `$HOME`) gives no class here, so the path
+    // falls to Home / Undetermined below.
     if let Some(c) = ctx.cwd.map(crate::exclude::normalize) {
         if c.starts_with('/')
             && (norm == c || norm.starts_with(&format!("{}/", c.trim_end_matches('/'))))
+            && repo_kind(&realpath(&c)) == RepoKind::Main
         {
-            match repo_kind(&realpath(&c)) {
-                RepoKind::Linked if strictly_inside_linked_checkout(&norm) => {
-                    return TargetClass::Worktree
-                }
-                RepoKind::Linked => {}
-                RepoKind::Main => return TargetClass::MainTree,
-                RepoKind::Unknown => {}
-            }
+            return TargetClass::MainTree;
         }
     }
     if let Some(h) = ctx.home.map(|h| h.trim_end_matches('/')) {
@@ -367,9 +358,10 @@ enum RepoKind {
 }
 
 /// Walk up from `abs` to the nearest ancestor holding a `.git` entry. A
-/// directory is a main working tree. A file is a gitlink: `.../worktrees/..`
-/// is a linked worktree; anything else (a submodule's `.git/modules/..`) is its
-/// own main tree. Any read error other than "absent" is `Unknown`.
+/// directory is a main working tree. A file is a gitlink, judged by
+/// [`gitlink_kind`] (git's own `commondir` answer: a linked worktree; a
+/// submodule's `.git/modules/..` is its own main tree). Any read error other
+/// than "absent" is `Unknown`.
 fn repo_kind(abs: &str) -> RepoKind {
     repo_kind_root(abs).0
 }
@@ -384,17 +376,7 @@ fn repo_kind_root(abs: &str) -> (RepoKind, Option<std::path::PathBuf>) {
         let root = Some(cur.to_path_buf());
         match std::fs::symlink_metadata(&dot_git) {
             Ok(m) if m.is_dir() => return (RepoKind::Main, root),
-            Ok(m) if m.is_file() => {
-                let kind = match harness_core::boundary::read_to_string(&dot_git) {
-                    Determination::Known(Some(t)) => match t.trim().strip_prefix("gitdir:") {
-                        Some(g) if g.contains("/worktrees/") => RepoKind::Linked,
-                        Some(_) => RepoKind::Main,
-                        None => RepoKind::Unknown,
-                    },
-                    _ => RepoKind::Unknown,
-                };
-                return (kind, root);
-            }
+            Ok(m) if m.is_file() => return (gitlink_kind(cur, &dot_git), root),
             Ok(_) => return (RepoKind::Unknown, None),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return (RepoKind::Unknown, None),
@@ -406,18 +388,70 @@ fn repo_kind_root(abs: &str) -> (RepoKind, Option<std::path::PathBuf>) {
     }
 }
 
-/// Whether `abs` lies STRICTLY inside a git linked-worktree checkout: its
-/// nearest `.git` is a gitlink into `<common>/worktrees/<name>` and the path
-/// is not that checkout's root. The worktree storage container
-/// (`.harness-worktrees/`, `~/.condukt/worktrees/<run>`) holds no `.git`, so
-/// it is never inside one.
-fn strictly_inside_linked_checkout(abs: &str) -> bool {
-    match repo_kind_root(abs) {
-        (RepoKind::Linked, Some(root)) => {
-            std::path::Path::new(abs.trim_end_matches('/')) != root.as_path()
-        }
-        _ => false,
+/// The kind of tree whose `.git` FILE (a gitlink) is `dot_git`, in `root`.
+/// Decided as git decides, never by a substring of the gitlink text: the
+/// `gitdir:` target must exist as a directory. A linked worktree's git dir
+/// holds a `commondir` file that resolves to an existing git dir and a
+/// `gitdir` back-link naming this very `.git` file; a git dir without
+/// `commondir` (a submodule's `.git/modules/..`) is a main tree. A gitlink
+/// that cannot be read or resolved, or whose git dir does not vouch for it, is
+/// `Unknown` (restrictive).
+fn gitlink_kind(root: &std::path::Path, dot_git: &std::path::Path) -> RepoKind {
+    let Determination::Known(Some(text)) = harness_core::boundary::read_to_string(dot_git) else {
+        return RepoKind::Unknown;
+    };
+    let Some(g) = text.trim().strip_prefix("gitdir:") else {
+        return RepoKind::Unknown;
+    };
+    let g = std::path::Path::new(g.trim());
+    let gitdir = match std::fs::canonicalize(root.join(g)) {
+        Ok(p) if p.is_dir() => p,
+        _ => return RepoKind::Unknown,
+    };
+    let common = match harness_core::boundary::read_to_string(&gitdir.join("commondir")) {
+        Determination::Known(None) => return RepoKind::Main,
+        Determination::Known(Some(c)) => c,
+        _ => return RepoKind::Unknown,
+    };
+    match std::fs::canonicalize(gitdir.join(common.trim())) {
+        Ok(p) if p.is_dir() => {}
+        _ => return RepoKind::Unknown,
     }
+    // The back-link: `<gitdir>/gitdir` names this checkout's `.git` file.
+    let Determination::Known(Some(back)) =
+        harness_core::boundary::read_to_string(&gitdir.join("gitdir"))
+    else {
+        return RepoKind::Unknown;
+    };
+    match (
+        std::fs::canonicalize(back.trim()),
+        std::fs::canonicalize(dot_git),
+    ) {
+        (Ok(a), Ok(b)) if a == b => RepoKind::Linked,
+        _ => RepoKind::Unknown,
+    }
+}
+
+/// The checkout root of the linked worktree the session's cwd belongs to, or
+/// `None` when the cwd is not inside a linked worktree (a main tree, no git
+/// tree, an unreadable or unresolvable gitlink, no cwd).
+fn cwd_linked_root(ctx: &Ctx<'_>) -> Option<std::path::PathBuf> {
+    let c = crate::exclude::normalize(ctx.cwd?);
+    if !c.starts_with('/') {
+        return None;
+    }
+    match repo_kind_root(&realpath(&c)) {
+        (RepoKind::Linked, Some(root)) => Some(root),
+        _ => None,
+    }
+}
+
+/// Whether `abs` lies STRICTLY inside the checkout `root`: below it, not the
+/// root itself, and its own nearest `.git` is that checkout's (a submodule's
+/// or another checkout nested below is a different tree).
+fn strictly_inside_checkout(abs: &str, root: &std::path::Path) -> bool {
+    let p = std::path::Path::new(abs.trim_end_matches('/'));
+    p != root && p.starts_with(root) && repo_kind_root(abs).1.as_deref() == Some(root)
 }
 
 /// The absolute, normalised spelling of `raw` (as [`class_of_path`] reads it),
@@ -482,10 +516,16 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     }
     // Round 9: the repository's kind is git's answer, never a substring of
     // the spelling (the `.harness-worktrees/` container is no repository).
-    let placed = match repo_kind(&real) {
-        RepoKind::Linked => TargetClass::Worktree,
-        RepoKind::Main => TargetClass::MainTree,
-        RepoKind::Unknown => TargetClass::Undetermined,
+    // Round 10: only the linked worktree the session's cwd belongs to is
+    // `Worktree` (the repository IS that checkout, root included, unlike a path
+    // target); another linked worktree is `Undetermined`.
+    let placed = match repo_kind_root(&real) {
+        (RepoKind::Linked, Some(root)) if cwd_linked_root(ctx).as_deref() == Some(&root) => {
+            TargetClass::Worktree
+        }
+        (RepoKind::Linked, _) => TargetClass::Undetermined,
+        (RepoKind::Main, _) => TargetClass::MainTree,
+        (RepoKind::Unknown, _) => TargetClass::Undetermined,
     };
     // Only the Allow-eligible class needs the spelling to be the real path.
     if placed == TargetClass::Worktree && !real_spelling {

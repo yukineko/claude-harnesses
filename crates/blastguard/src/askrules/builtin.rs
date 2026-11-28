@@ -28,7 +28,7 @@ use harness_core::asklearn::TargetClass;
 /// How much of a tool's invocation the shape pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
-    /// The verb says everything that matters (`rm`, `mv`, a file tool).
+    /// The verb says everything that matters (`rm`, a file tool; `mv` is not modelled).
     Plain,
     /// `git`: only a listed local subcommand; no global option that changes
     /// the repository, the configuration or the helper executables.
@@ -71,7 +71,10 @@ pub const MODELLED_TOOLS: &[(&str, Model)] = &[
 ];
 
 /// The git subcommands the shape models completely (local; no network, no
-/// configuration, no remote management).
+/// configuration, no remote management; `worktree` is NOT here: `worktree
+/// remove|move|prune` delete or move another checkout). The list includes
+/// destructive local subcommands (`reset`, `clean`, `rm`, ...); the class of
+/// the repository they act on is what limits them.
 const GIT_SUBCOMMANDS: &[&str] = &[
     "add",
     "am",
@@ -103,7 +106,6 @@ const GIT_SUBCOMMANDS: &[&str] = &[
     "status",
     "switch",
     "tag",
-    "worktree",
 ];
 
 /// Options that change what a git command runs or acts on, whatever the
@@ -111,6 +113,7 @@ const GIT_SUBCOMMANDS: &[&str] = &[
 /// normalised verb cannot tell a global `-c k=v` from a subcommand `-c`, and
 /// the refusal only withholds an Allow.
 const GIT_REFUSED_FLAGS: &[&str] = &[
+    "-C",
     "-c",
     "--exec-path",
     "--config-env",

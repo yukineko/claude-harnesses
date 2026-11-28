@@ -4,9 +4,11 @@
 # This file is protected config: a Write / Edit / shell write to it is never
 # Allow. Test override: env BLASTGUARD_ASK_RULES=<path> replaces it.
 #
-# Evaluation: invariants + the positive allow-list (askrules/builtin.rs
-# MODELLED_TOOLS) -> deny rules -> not_learnable -> allow rules whose `except`
-# list has no matching entry -> no match (the Ask stands).
+# Evaluation (askrules::judge): deny rules -> poison check (an unreadable /
+# unparsable file or restrictive rule allows nothing) -> invariants + the
+# positive allow-list (askrules/builtin.rs MODELLED_TOOLS) -> not_learnable ->
+# allow rules whose `except` list has no matching entry -> no match (the Ask
+# stands).
 #
 # Regex (`*_regex`) is accepted only on the restrictive side: deny,
 # not_learnable and `except` entries. Rust `regex` syntax, unanchored search.

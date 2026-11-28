@@ -238,6 +238,16 @@ forge・condukt のスケジューラが再利用）。
   subcommand では `GIT_DIR`/`GIT_WORK_TREE` env 前置の値が置ける literal のときだけ landing 判定）。`git clone SRC` は
   宛先省略なら SRC の basename（`.git`/`.bundle`/末尾 `/` 除去、`--bare`/`--mirror` は `.git` 付き）を cwd 起点で判定、
   導出名が実行時展開なら cwd 自身を判定する（旧残余「導出名は判定しない」を解消）。`git apply` も同じパーサ。
+  **backlog 5c848034（未モデルの git subcommand・alias・work tree・apply 祖先・部分 quote）**: 表に行が無い
+  subcommand（`merge-file`・`mailsplit -o<dir>`・`fast-export --export-marks=`・`credential-store --file=` など）は
+  `--output` だけでなく path になりうる全語を判定し、保護/system に当たれば Ask（日常 porcelain の
+  `unmodelled::ORDINARY` と専用 arm を持つ subcommand は対象外＝通常の repo 作業は Allow のまま）。
+  `-c alias.X=VERB …` は alias が指す VERB の target も判定（`!` alias は exec ban 側）。`--work-tree` 付きの
+  `checkout-index` は `-a` 無しでも operand / `--stdin` があれば work tree 自身を着地点として判定。
+  `git apply` の実行 dir が `$HOME/.claude` の祖先（`$HOME`・`/`）なら patch 内の名前で到達しうるので Ask
+  （`protected_ancestor_landing_ask`）。`rm`/`mv` 等の部分 quote（`"settings".json`・`settings'.json'`）の quote 除去は
+  shell word parser（`first_shell_word`）に一本化（旧 `strip_plain_quotes` は全体が 1 対の quote の語のみ）。
+  **残余**: alias 解決は `fileops/write_targets` の write target 判定のみ（他の git arm は alias 名のまま）。
   **残余**: `checkout-index --prefix=REL` で `--work-tree` 無しのとき cwd 起点で判定する（git は work tree top 起点なので
   cwd が work tree の subdir の場合は未検証）。generic の `--output` 走査と `archive -o` は未知 option を読み飛ばす
   （lenient。target を名指す option は表にあるものだけ）。

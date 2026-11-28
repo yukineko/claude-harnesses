@@ -1,3 +1,4 @@
+use super::words::first_shell_word;
 use super::{exclude, has_glob_meta, Ctx, Decision, Determination};
 
 /// Write is new/overwrite both. We stay conservative and only Deny the clearly
@@ -585,32 +586,31 @@ fn cwd_joined(ctx: &Ctx<'_>, path: &str) -> Option<String> {
     Some(format!("{}/{path}", base.trim_end_matches('/')))
 }
 
-/// The operand with ONE pair of plain shell quotes removed (`"settings.json"`,
-/// `'settings.json'`), or `None` when it is not wholly one quoted word or the
-/// inside still needs shell interpretation (`$`, backtick, backslash, a quote).
-/// A raw operand token keeps its quotes, so `"settings.json"` matches no
-/// protected glob while the shell passes `settings.json` to the command
-/// (backlog f63b97b3). Words that need real expansion are left to the callers'
-/// own unresolvable-operand handling.
-pub(super) fn strip_plain_quotes(word: &str) -> Option<&str> {
-    let inner = word
-        .strip_prefix('"')
-        .and_then(|w| w.strip_suffix('"'))
-        .or_else(|| word.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')))?;
-    if inner.contains(['"', '\'', '$', '`', '\\']) {
+/// The operand as the shell hands it to the command: quote removal done by the
+/// shell word parser ([`first_shell_word`]), so a PARTLY quoted word
+/// (`"settings".json`, `settings'.json'`, `"settings.json"''`) reads the same as
+/// a wholly quoted one. `None` when nothing changes, or when the result still
+/// needs real expansion (`$`, backtick) — those are left to the callers' own
+/// unresolvable-operand handling. A raw operand token keeps its quotes, so
+/// `"settings".json` matches no protected glob while the shell passes
+/// `settings.json` to the command (backlog f63b97b3, 5c848034).
+pub(super) fn unquoted_operand(word: &str) -> Option<String> {
+    let plain = first_shell_word(word)?;
+    if plain == word || plain.contains(['$', '`']) {
         return None;
     }
-    Some(inner)
+    Some(plain)
 }
 
 /// Whether `hit` holds for the operand as spelled, as joined onto the cwd, or
-/// for either of those with plain quotes removed ([`strip_plain_quotes`]).
+/// for either of those with its quotes removed ([`unquoted_operand`]).
 fn hit_any_spelling(ctx: &Ctx<'_>, path: &str, hit: impl Fn(&str) -> bool) -> bool {
-    let spellings = [Some(path), strip_plain_quotes(path)];
-    spellings
+    let unquoted = unquoted_operand(path);
+    let found = [Some(path), unquoted.as_deref()]
         .into_iter()
         .flatten()
-        .any(|p| hit(p) || cwd_joined(ctx, p).is_some_and(|abs| hit(&abs)))
+        .any(|p| hit(p) || cwd_joined(ctx, p).is_some_and(|abs| hit(&abs)));
+    found
 }
 
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
@@ -793,6 +793,44 @@ to guess"
         )));
     }
     None
+}
+
+/// Ask when `dir` is an ANCESTOR of the user's `$HOME/.claude` (`$HOME` itself,
+/// `/`): a command that writes files named relative to `dir` (`git apply` of a
+/// patch for `.claude/settings.json`) reaches `~/.claude` through a name that is
+/// in the patch, not on the command line (backlog 5c848034). Judged at the
+/// spelling and at the place its symlinks lead; `$HOME` unset or a `dir` that
+/// cannot be placed is not asserted either way (the callers' own placement
+/// Ask covers an unplaceable directory).
+pub(super) fn protected_ancestor_landing_ask(
+    ctx: &Ctx<'_>,
+    action: &str,
+    dir: &str,
+) -> Option<Decision> {
+    let home = std::env::var("HOME").ok().filter(|h| h.starts_with('/'))?;
+    let claude = format!("{}/.claude", home.trim_end_matches('/'));
+    let ancestor_of = |d: &str, target: &str| {
+        let d = d.trim_end_matches('/');
+        d.is_empty() || target == d || target.starts_with(&format!("{d}/"))
+    };
+    let mut targets = vec![claude.clone()];
+    if let Ok(real) = std::fs::canonicalize(&claude) {
+        targets.push(real.to_string_lossy().into_owned());
+    }
+    let mut dirs = vec![dir.to_string()];
+    if let Some(Determination::Known(real)) = physical_landing(dir, ctx.raw_base.as_deref()) {
+        dirs.push(real);
+    }
+    let hit = dirs
+        .iter()
+        .any(|d| targets.iter().any(|t| ancestor_of(d, t)));
+    hit.then(|| {
+        Decision::ask(format!(
+            "{action} runs in {dir}, a directory above ~/.claude — the files it writes are named \
+inside the patch, not on the command line, so blastguard cannot tell whether it rewrites a \
+protected gate/config path and refuses to guess"
+        ))
+    })
 }
 
 /// The literal directory prefix of a wildcard operand: the components before

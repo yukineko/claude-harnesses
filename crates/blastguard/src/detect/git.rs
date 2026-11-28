@@ -83,7 +83,7 @@ const HOOKSPATH_REASON: &str =
 /// `git config core.hooksPath …` was denied: the same setting, applied for the
 /// duration of one command instead of written to a file, through a code path
 /// whose only job was to ignore it.
-fn git_global_config_assignments<'a>(globals: &[&'a str]) -> Vec<&'a str> {
+pub(in crate::detect) fn git_global_config_assignments<'a>(globals: &[&'a str]) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < globals.len() {

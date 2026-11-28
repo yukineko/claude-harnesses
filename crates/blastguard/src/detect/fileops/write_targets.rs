@@ -46,6 +46,8 @@
 //! an Ask, and so is a `-C` directory that cannot be placed while a relative
 //! write target is being judged.
 
+mod unmodelled;
+
 use harness_core::verdict::Determination;
 
 use super::super::git::argv::{parse, Opt, Parsed, Spec};
@@ -554,8 +556,12 @@ fn git_write_targets(
             }
             // Without a prefix the files land in the work tree itself — judged
             // only when `--work-tree` names it (the plain cwd form is the
-            // ordinary `git checkout-index -a` of a checkout).
-            if !prefixed && explicit_work_tree && p.has("all") {
+            // ordinary `git checkout-index -a` of a checkout). Named files
+            // (`-- settings.json`, `--stdin`) land there just as `-a` does.
+            if !prefixed
+                && explicit_work_tree
+                && (p.has("all") || p.has("stdin") || !p.operands.is_empty())
+            {
                 out.push(Target {
                     action: "git checkout-index".to_string(),
                     value: Some(".".to_string()),
@@ -674,6 +680,19 @@ fn git_write_targets(
                     Kind::File,
                 ));
             }
+            // A verb the table has no row for: every word that could be a
+            // path is judged (an Ask on a protected / system landing).
+            if !unmodelled::is_ordinary(sub) {
+                for w in guess_words(args) {
+                    out.push(Target {
+                        action: format!("git {sub} (unmodelled subcommand)"),
+                        value: Some(w),
+                        kind: Kind::Dir,
+                        base: Base::Cwd,
+                        mode: Mode::Guess,
+                    });
+                }
+            }
         }
     }
     out
@@ -743,7 +762,19 @@ pub(in crate::detect) fn git_write_target_verdict(
         .iter()
         .any(|g| *g == "--work-tree" || g.starts_with("--work-tree="));
     let explicit_work_tree = global_work_tree || env.work_tree.is_some();
-    let targets = git_write_targets(globals, &env, explicit_work_tree, sub, args);
+    let mut targets = git_write_targets(globals, &env, explicit_work_tree, sub, args);
+    // `-c alias.X=VERB …`: the alias hides the verb, so the verb it stands for
+    // is judged too (the alias name itself stays judged as an unmodelled verb).
+    if let Some((verb, verb_args)) = unmodelled::resolve_alias(globals, sub, args) {
+        let verb_args: Vec<&str> = verb_args.iter().map(String::as_str).collect();
+        targets.extend(git_write_targets(
+            globals,
+            &env,
+            explicit_work_tree,
+            &verb,
+            &verb_args,
+        ));
+    }
     if targets.is_empty() {
         return Decision::Allow;
     }

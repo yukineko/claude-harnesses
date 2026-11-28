@@ -99,6 +99,7 @@ cannot tell which files it writes and refuses to guess",
         let action = "git apply";
         if let Some(d) = super::super::protected::protected_landing_block(ctx, action, b)
             .or_else(|| super::super::protected::protected_path_block(ctx, action, b))
+            .or_else(|| super::super::protected::protected_ancestor_landing_ask(ctx, action, b))
         {
             return d;
         }

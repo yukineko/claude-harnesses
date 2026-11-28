@@ -99094,3 +99094,206 @@ rev = "e897078e07be36a6f590dd837f0fc89d847cb02c"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4e7fc8e2"
+title = "blastguard detector: git/touch/mkdir write targets still reach protected or system paths (8 shapes after 96faed52)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Found by the independent verifier of 96faed52 (commit 879a21288, test crates/blastguard/tests/backlog_20261128_git_write_targets_verifier.rs, 8 ignored REDs, each shape observed writing with real git/touch). (1) --work-tree relative --output resolved from work tree but git resolves from process cwd; (2) format-patch -o <protected dir itself>; (3) worktree add into an existing empty protected dir; (4) stash show -p / reflog / alias --output; (5) git config --file/-f <protected>; (6) checkout-index --prefix=<protected>/; (7) git init / clone / --git-dir init under protected; (8) touch/mkdir into /etc, /System not routed through system_landing_block (cp is Deny). 4-8 were Allow already at 0.2.1005."
+created_at = 1795836857
+updated_at = 1795851168
+weight = 0.0
+issue_number = 2019
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2019"
+issue_closed_at = 1795851171
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier -- --ignored"
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836857
+detail = """
+exit 101:  0 passed; 8 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-50f611af92b15e30)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_git_write_targets_verifier`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier --test verifier_4e7fc8e2_fix_20261128"
+exit = 0
+passed = 41
+rev = "f7fef016e736acd55a4861d2521d3d58c46bb789"
+observed_at = 1795851159
+output_digest = "sha256:324419f705565907ad85b76bb9b11f6da2c1c2d8cb0f28b717146a798151139d"
+excerpt = """
+
+running 22 tests
+test output_indicator_options_are_not_write_targets ... ok
+test bundle_create_to_protected_is_not_allow ... ok
+test archive_output_to_protected_is_not_allow ... ok
+test git_output_into_system_dirs_is_deny ... ok
+test format_patch_output_dir_into_protected_subdir_is_not_allow ... ok
+test dash_c_relative_output_is_placed_in_the_moved_dir ... ok
+test red_checkout_index_prefix_into_protected ... ok
+test control_ordinary_writes_inside_worktree_stay_allow ... ok
+test quoted_and_abbreviated_output_to_protected_is_not_allow ... ok
+test red_git_config_file_rewrites_protected ... ok
+test control_4e7fc8e2_ordinary_git_write_shapes_stay_allow ... ok
+test red_diff_output_via_other_subcommands ... ok
+test red_init_and_clone_create_under_protected ... ok
+test red_touch_mkdir_into_system_dirs_like_cp ... ok
+test red_format_patch_output_dir_is_the_protected_dir_itself ... ok
+test red_worktree_add_into_empty_protected_dir_itself ... ok
+test touch_no_dereference_on_link_itself_is_allow ... ok
+test red_work_tree_relative_output_is_resolved_from_cwd ... ok
+test work_tree_with_lexically_protected_name_is_not_allow ... ok
+test unexpanded_or_missing_output_value_is_not_allow ... ok
+test worktree_add_and_move_under_protected_is_not_allow ... ok
+test touch_and_mkdir_through_links_into_protected_are_not_allow ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+
+running 19 tests
+test control_config_file_named_get_unabbreviated_is_not_allow ... ok
+test green_install_d_into_protected ... ok
+test green_system_dir_install_variants ... ok
+test green_relative_targets_with_cwd_in_dot_claude ... ok
+test green_clone_abbreviated_value_option_shifts_operands ... ok
+test green_system_dir_touch_mkdir_variants ... ok
+test green_work_tree_checkout_into_protected ... ok
+test hole_clone_double_dash_operands ... ok
+test hole_config_abbreviated_file_named_get_is_not_read_only ... ok
+test hole_dash_c_protected_dir_init_without_operand ... ok
+test hole_format_patch_clustered_short_o ... ok
+test hole_clone_derived_name_into_existing_empty_protected_dir ... ok
+test hole_git_dir_env_prefix_init ... ok
+test hole_init_abbreviated_value_option_shifts_operand ... ok
+test hole_init_double_dash_operand ... ok
+test hole_work_tree_checkout_index_prefix_is_relative_to_work_tree ... ok
+test fp_ordinary_writes_stay_allow ... ok
+test hole_worktree_add_abbreviated_reason_shifts_operand ... ok
+test green_spelling_variants_are_not_allow ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Compiling blastguard v0.2.1028 (/Users/yuki/src/.harness-worktrees/fix-write-targets/crates/blastguard)
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.58s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-338ad049dac6c88b)
+     Running tests/verifier_4e7fc8e2_fix_20261128.rs (target/debug/deps/verifier_4e7fc8e2_fix_20261128-5134258e07fa3267)
+"""
+
+[task.closure.red]
+rev = "879a2128852c2544ee1cdef17840a5ac3e2516dc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f63b97b3"
+title = "blastguard detector: 7 protected-target shapes still Allow after ea96e65d (git apply --stat --apply / --dir= / cwd, quoted relative rm, mv of worktree-store parent, separate-git-dir main tree, git rm -r in main tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Independent verifier of ea96e65d (commit 18accae2f, crates/blastguard/tests/backlog_20261128_relative_protected_verifier.rs, 7 ignored REDs). git apply 3 shapes observed rewriting ~/.claude/settings.json with real git. (1) apply.rs returns Allow on any of --check/--stat/--numstat/--summary even when --apply follows; (2) --dir= abbreviation not recognised; (3) git apply run with cwd/-C inside ~/.claude not judged; (4) rm -f "settings.json" / 'settings.json' with cwd ~/.claude Allow (unquoted is Deny); (5) mv <home>/src (parent of .harness-worktrees) Allow; (6) shared_main_tree returns Known(false) when .git is a file (separate-git-dir primary); (7) git rm -r src in a shared main tree Allow. (5) and (7) expectation is the verifier's analogy - confirm when fixing."""
+created_at = 1795842815
+updated_at = 1795851174
+weight = 0.0
+issue_number = 2023
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2023"
+issue_closed_at = 1795851177
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier -- --ignored"
+rev = "6e0e6dec57cf3afea24246ff4f20e908a8a80303"
+observed_at = 1795842815
+detail = """
+exit 101:  passed; 7 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-9bd61be8b48bcf3d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_relative_protected_verifier`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier"
+exit = 0
+passed = 16
+rev = "f7fef016e736acd55a4861d2521d3d58c46bb789"
+observed_at = 1795851171
+output_digest = "sha256:bab0805f877467b710cced954d284c3d216997f400004aaf1735abd45288a6a2"
+excerpt = """
+
+running 16 tests
+test red_git_apply_abbreviated_directory_option_is_not_allow ... ok
+test git_apply_unsafe_paths_alone_is_ask ... ok
+test red_git_apply_in_protected_dir_is_not_allow ... ok
+test git_apply_harmless_spellings_keep_pre_fix_allow ... ok
+test git_apply_directory_spellings_into_claude_are_ask ... ok
+test mv_ordinary_files_keep_pre_fix_allow ... ok
+test mv_of_worktree_store_or_checkout_is_ask ... ok
+test red_mv_of_worktree_store_container_is_not_allow ... ok
+test red_git_apply_readonly_flag_then_apply_is_not_allow ... ok
+test red_quoted_relative_rm_of_settings_is_not_allow ... ok
+test main_tree_tracked_recursive_rm_is_not_allow ... ok
+test red_git_rm_recursive_in_main_tree_is_not_allow ... ok
+test red_separate_git_dir_main_tree_rm_is_not_allow ... ok
+test relative_protected_spellings_are_deny ... ok
+test relative_rm_of_ordinary_files_keeps_pre_fix_verdict ... ok
+test unreadable_worktree_registry_is_ask ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1028 (/Users/yuki/src/.harness-worktrees/fix-write-targets/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-5d2074faeaa8c2ac)
+"""
+
+[task.closure.red]
+rev = "18accae2fb98d6febbd2e7490d40f8da7d4ce4c2"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

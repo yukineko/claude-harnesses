@@ -387,7 +387,7 @@ fn control_ordinary_writes_inside_worktree_stay_allow() {
 // ---------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_work_tree_relative_output_is_resolved_from_cwd() {
     // Real git: `--output=REL` is relative to the process cwd, not --work-tree.
     let fx = Fx::new();
@@ -404,7 +404,7 @@ fn red_work_tree_relative_output_is_resolved_from_cwd() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_format_patch_output_dir_is_the_protected_dir_itself() {
     let fx = Fx::new();
     let h = fx.hooks();
@@ -423,7 +423,7 @@ fn red_format_patch_output_dir_is_the_protected_dir_itself() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_worktree_add_into_empty_protected_dir_itself() {
     // Fixture hooks/ is empty; real git populates an existing empty dir.
     let fx = Fx::new();
@@ -435,7 +435,7 @@ fn red_worktree_add_into_empty_protected_dir_itself() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_diff_output_via_other_subcommands() {
     let fx = Fx::new();
     let s = fx.settings();
@@ -451,7 +451,7 @@ fn red_diff_output_via_other_subcommands() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_git_config_file_rewrites_protected() {
     let fx = Fx::new();
     let s = fx.settings();
@@ -466,7 +466,7 @@ fn red_git_config_file_rewrites_protected() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_checkout_index_prefix_into_protected() {
     let fx = Fx::new();
     expect(
@@ -477,7 +477,7 @@ fn red_checkout_index_prefix_into_protected() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_init_and_clone_create_under_protected() {
     let fx = Fx::new();
     let h = fx.hooks();
@@ -493,7 +493,7 @@ fn red_init_and_clone_create_under_protected() {
 }
 
 #[test]
-#[ignore = "RED observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
+#[ignore = "RED(4e7fc8e2): observed 2026-11-28 on 0c1ba7647 (verifier of 96faed52): Allow"]
 fn red_touch_mkdir_into_system_dirs_like_cp() {
     // cp / tee / git --output to /etc are Deny; touch / mkdir there are Allow.
     let fx = Fx::new();

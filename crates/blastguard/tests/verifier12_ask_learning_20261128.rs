@@ -606,7 +606,7 @@ fn r12_own_worktree_class_ignores_core_worktree_in_worktree_config() {
 /// item: that one is the command that WRITES the redirection; this is a
 /// destructive command judged as if wt were its own work tree.
 #[test]
-#[ignore = "detector, filed separately"]
+#[ignore = "RED(9c16942b): detector — git clean -fdx in a core.worktree-redirected own worktree is Allow"]
 fn r12_detector_clean_in_redirected_own_worktree_is_allow() {
     let h = env_prod("wtcleanharm");
     redirect_wt(&h);

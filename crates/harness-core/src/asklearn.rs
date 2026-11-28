@@ -206,7 +206,7 @@ pub struct OutcomeRecord {
 /// `allow` or `deny`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Verdict {
+pub enum LearnedVerdict {
     Allow,
     Deny,
 }
@@ -215,7 +215,7 @@ pub enum Verdict {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub shape: String,
-    pub decision: Verdict,
+    pub decision: LearnedVerdict,
     pub approvals: u64,
     pub declines: u64,
     pub sessions: u64,
@@ -293,13 +293,13 @@ pub fn learn(records: &[OutcomeRecord]) -> LearnedTable {
     let mut entries = Vec::new();
     for (key, (shape, acc)) in by_shape {
         let decision = if acc.declines >= 1 {
-            Verdict::Deny
+            LearnedVerdict::Deny
         } else if acc.approvals >= MIN_APPROVALS
             && acc.approved_sessions.len() as u64 >= MIN_SESSIONS
             && !acc.harm
             && shape.allow_permitted()
         {
-            Verdict::Allow
+            LearnedVerdict::Allow
         } else {
             continue;
         };
@@ -331,18 +331,18 @@ pub fn lookup(table: &LearnedTable, shape: &Shape) -> Option<LearnedDecision> {
         .iter()
         .filter(|e| e.shape == key)
         .min_by_key(|e| match e.decision {
-            Verdict::Deny => 0,
-            Verdict::Allow => 1,
+            LearnedVerdict::Deny => 0,
+            LearnedVerdict::Allow => 1,
         })?;
     match e.decision {
-        Verdict::Allow if !shape.allow_permitted() => Option::None,
-        Verdict::Allow => Some(LearnedDecision::Allow {
+        LearnedVerdict::Allow if !shape.allow_permitted() => Option::None,
+        LearnedVerdict::Allow => Some(LearnedDecision::Allow {
             shape: key,
             approvals: e.approvals,
             sessions: e.sessions,
             declines: e.declines,
         }),
-        Verdict::Deny => Some(LearnedDecision::Deny {
+        LearnedVerdict::Deny => Some(LearnedDecision::Deny {
             shape: key,
             approvals: e.approvals,
             sessions: e.sessions,
@@ -421,7 +421,7 @@ mod schema_tests {
             version: TABLE_VERSION,
             entries: vec![Entry {
                 shape: old_key.into(),
-                decision: Verdict::Allow,
+                decision: LearnedVerdict::Allow,
                 approvals: 50,
                 declines: 0,
                 sessions: 20,

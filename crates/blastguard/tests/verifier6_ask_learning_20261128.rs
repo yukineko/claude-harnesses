@@ -576,7 +576,7 @@ fn r6_detector_brace_expansion_hides_a_destructive_option() {
 #[test]
 fn r6_poisons_allow_spares_a_valid_rules_file_and_a_defective_allow_rule() {
     use blastguard::askrules::{judge, Facts, Judgement, RuleSet};
-    use harness_core::asklearn::{Entry, LearnedTable, Shape, TargetClass, Verdict};
+    use harness_core::asklearn::{Entry, LearnedTable, LearnedVerdict, Shape, TargetClass};
     let valid = r#"
 # comment
 [[rule]]
@@ -617,7 +617,7 @@ command_regex = '\b(ba|z|fi)?sh\s+-c\b'
         version: 1,
         entries: vec![Entry {
             shape: shape.key(),
-            decision: Verdict::Allow,
+            decision: LearnedVerdict::Allow,
             approvals: 50,
             declines: 0,
             sessions: 20,

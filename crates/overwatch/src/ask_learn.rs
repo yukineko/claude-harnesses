@@ -663,7 +663,7 @@ fn learn_run(o: &Opts) -> Result<Run, String> {
         .collect();
     let mut promoted = 0;
     for e in &table.entries {
-        if e.decision == asklearn::Verdict::Allow && !existing.contains(&e.shape) {
+        if e.decision == asklearn::LearnedVerdict::Allow && !existing.contains(&e.shape) {
             let line = json!({"shape": e.shape, "approvals": e.approvals,
                 "sessions": e.sessions, "samples": e.samples, "ts": now(), "filed": false});
             harness_core::append::append_line(&promo_path, &line.to_string())
@@ -681,12 +681,12 @@ fn learn_run(o: &Opts) -> Result<Run, String> {
         allow: table
             .entries
             .iter()
-            .filter(|e| e.decision == asklearn::Verdict::Allow)
+            .filter(|e| e.decision == asklearn::LearnedVerdict::Allow)
             .count(),
         deny: table
             .entries
             .iter()
-            .filter(|e| e.decision == asklearn::Verdict::Deny)
+            .filter(|e| e.decision == asklearn::LearnedVerdict::Deny)
             .count(),
         promoted,
         partial,

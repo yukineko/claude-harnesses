@@ -89,7 +89,7 @@ fn empty_table() -> harness_core::asklearn::LearnedTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_core::asklearn::{Entry, LearnedTable, TargetClass, Verdict};
+    use harness_core::asklearn::{Entry, LearnedTable, LearnedVerdict, TargetClass};
 
     fn shape(class: TargetClass, verb: &str) -> Shape {
         Shape {
@@ -99,7 +99,7 @@ mod tests {
         }
     }
 
-    fn table(s: &Shape, decision: Verdict, declines: u64) -> TableRead {
+    fn table(s: &Shape, decision: LearnedVerdict, declines: u64) -> TableRead {
         TableRead::Known(LearnedTable {
             version: 1,
             entries: vec![Entry {
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn deny_is_never_changed() {
         let s = shape(TargetClass::Home, "rm");
-        let t = table(&s, Verdict::Allow, 0);
+        let t = table(&s, LearnedVerdict::Allow, 0);
         let d = Decision::deny("no");
         assert_eq!(apply(d.clone(), &s, false, &t), Applied::Unchanged(d));
     }
@@ -137,7 +137,7 @@ mod tests {
             TargetClass::Undetermined,
         ] {
             let s = shape(class, "rm");
-            let t = table(&s, Verdict::Allow, 0);
+            let t = table(&s, LearnedVerdict::Allow, 0);
             assert!(
                 matches!(
                     apply_with(Decision::ask("q"), &s, false, cmd, &t, &[]),
@@ -154,7 +154,7 @@ mod tests {
                 &s,
                 false,
                 cmd,
-                &table(&s, Verdict::Allow, 1),
+                &table(&s, LearnedVerdict::Allow, 1),
                 &[]
             ),
             Applied::Unchanged(Decision::Ask(_))
@@ -166,7 +166,7 @@ mod tests {
                 &s,
                 true,
                 cmd,
-                &table(&s, Verdict::Allow, 0),
+                &table(&s, LearnedVerdict::Allow, 0),
                 &[]
             ),
             Applied::Unchanged(Decision::Ask(_))
@@ -174,7 +174,7 @@ mod tests {
         // Changed with the structural gate: the clean-entry control now
         // carries the command text (one simple static command), because a
         // shell call with no readable text is never Allowed.
-        let t = table(&s, Verdict::Allow, 0);
+        let t = table(&s, LearnedVerdict::Allow, 0);
         assert!(matches!(
             apply_with(Decision::ask("q"), &s, false, Some("rm build"), &t, &[]),
             Applied::Allow(_)

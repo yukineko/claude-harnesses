@@ -30,7 +30,7 @@
 //! `command_regex` is searched in the raw text AND in the quote-stripped words.
 
 use super::{Facts, Verb};
-use harness_core::asklearn::{LearnedTable, Verdict};
+use harness_core::asklearn::{LearnedTable, LearnedVerdict};
 use harness_core::verdict::Determination;
 use regex::Regex;
 use std::path::Path;
@@ -444,7 +444,7 @@ impl RuleSet {
                 ..Cond::default()
             };
             match e.decision {
-                Verdict::Allow if e.declines == 0 => rs.allow.push(Allow {
+                LearnedVerdict::Allow if e.declines == 0 => rs.allow.push(Allow {
                     reason: format!(
                         "learned: approved {} times across {} sessions, {} declines \u{2014} shape {}",
                         e.approvals, e.sessions, e.declines, e.shape
@@ -452,8 +452,8 @@ impl RuleSet {
                     cond,
                     except: Vec::new(),
                 }),
-                Verdict::Allow => {}
-                Verdict::Deny => rs.deny.push(Deny {
+                LearnedVerdict::Allow => {}
+                LearnedVerdict::Deny => rs.deny.push(Deny {
                     reason: format!(
                         "blastguard: learned deny \u{2014} a human declined this shape {} time(s) \
                          (approved {} times across {} sessions) \u{2014} shape {}. The original \

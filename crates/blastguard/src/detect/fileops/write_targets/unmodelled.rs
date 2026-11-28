@@ -179,6 +179,220 @@ pub(super) fn is_ordinary(sub: &str) -> bool {
     ORDINARY.contains(&sub) || READ_ONLY.contains(&sub) || MODELLED.contains(&sub)
 }
 
+/// Every command `git help -a` lists (porcelain, ancillary, plumbing) — the
+/// names git runs as builtins / external `git-*` programs BEFORE it looks at an
+/// alias. A static table: the set of git commands is not read from the machine.
+const BUILTINS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archimport",
+    "archive",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "citool",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "credential-cache",
+    "credential-store",
+    "cvsexportcommit",
+    "cvsimport",
+    "cvsserver",
+    "daemon",
+    "describe",
+    "diagnose",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "difftool",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "fetch-pack",
+    "filter-branch",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "fsck-objects",
+    "gc",
+    "get-tar-commit-id",
+    "gitk",
+    "gitweb",
+    "grep",
+    "gui",
+    "hash-object",
+    "help",
+    "hook",
+    "http-backend",
+    "imap-send",
+    "index-pack",
+    "init",
+    "init-db",
+    "instaweb",
+    "interpret-trailers",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-octopus",
+    "merge-one-file",
+    "merge-ours",
+    "merge-recursive",
+    "merge-resolve",
+    "merge-subtree",
+    "merge-tree",
+    "mergetool",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "p4",
+    "pack-objects",
+    "pack-redundant",
+    "pack-refs",
+    "patch-id",
+    "prune",
+    "prune-packed",
+    "pull",
+    "push",
+    "quiltimport",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "receive-pack",
+    "reflog",
+    "refs",
+    "remote",
+    "remote-ext",
+    "remote-fd",
+    "repack",
+    "replace",
+    "replay",
+    "request-pull",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "scalar",
+    "send-email",
+    "send-pack",
+    "sh-i18n",
+    "sh-setup",
+    "shell",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-index",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule",
+    "svn",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-file",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "update-server-info",
+    "upload-archive",
+    "upload-pack",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "web--browse",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+];
+
+/// True when git would run `sub` as a command of its own (an alias of the same
+/// name is ignored).
+pub(super) fn is_builtin(sub: &str) -> bool {
+    BUILTINS.contains(&sub) || is_ordinary(sub)
+}
+
+/// Subcommands that write files into the work tree (or remove / move them):
+/// the work tree is a landing for these. Reading verbs and verbs that only touch
+/// the index / refs / objects (`add`, `commit`, `fetch`, `tag`, …) are not.
+const WORKTREE_WRITERS: &[&str] = &[
+    "checkout",
+    "checkout-index",
+    "switch",
+    "restore",
+    "reset",
+    "read-tree",
+    "stash",
+    "am",
+    "apply",
+    "merge",
+    "rebase",
+    "pull",
+    "cherry-pick",
+    "revert",
+    "clean",
+    "rm",
+    "mv",
+    "sparse-checkout",
+];
+
+/// True when `sub` writes into the work tree (see [`WORKTREE_WRITERS`]).
+pub(super) fn writes_work_tree(sub: &str) -> bool {
+    WORKTREE_WRITERS.contains(&sub)
+}
+
+/// Helpers that drop files in the current directory without naming them:
+/// `unpack-file` writes `.merge_file_*`, `bugreport` / `diagnose` a report.
+/// Only these make the cwd a landing; a verb that reads or prints (`fast-export`,
+/// `submodule status`) does not.
+const CWD_WRITERS: &[&str] = &["unpack-file", "bugreport", "diagnose"];
+
+/// True when `sub` writes a file into the cwd (see [`CWD_WRITERS`]).
+pub(super) fn writes_cwd(sub: &str) -> bool {
+    CWD_WRITERS.contains(&sub)
+}
+
 /// Longest alias chain followed (git itself stops at a loop).
 const MAX_ALIAS_DEPTH: usize = 8;
 
@@ -189,16 +403,21 @@ pub(super) fn resolve_alias(
     globals: &[&str],
     sub: &str,
     args: &[&str],
+    stored: &[(String, String)],
 ) -> Option<(String, Vec<String>)> {
-    let assignments: Vec<(String, String)> = git_global_config_assignments(globals)
-        .into_iter()
-        .filter_map(|a| {
-            let a = first_shell_word(a).unwrap_or_else(|| a.to_string());
-            let (key, value) = a.split_once('=')?;
-            key.get(..6).filter(|p| p.eq_ignore_ascii_case("alias."))?;
-            Some((key[6..].to_ascii_lowercase(), value.to_string()))
-        })
-        .collect();
+    // Stored (config file) aliases first, command-line `-c` after: the later
+    // assignment wins.
+    let mut assignments: Vec<(String, String)> = stored.to_vec();
+    assignments.extend(
+        git_global_config_assignments(globals)
+            .into_iter()
+            .filter_map(|a| {
+                let a = first_shell_word(a).unwrap_or_else(|| a.to_string());
+                let (key, value) = a.split_once('=')?;
+                key.get(..6).filter(|p| p.eq_ignore_ascii_case("alias."))?;
+                Some((key[6..].to_ascii_lowercase(), value.to_string()))
+            }),
+    );
     if assignments.is_empty() {
         return None;
     }
@@ -206,6 +425,12 @@ pub(super) fn resolve_alias(
     let mut cur_args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
     let mut resolved = false;
     for _ in 0..MAX_ALIAS_DEPTH {
+        // git runs a builtin of that name and ignores an alias spelled the
+        // same, so a builtin name is never expanded (`-c alias.merge-file=log
+        // merge-file …` is `merge-file`).
+        if is_builtin(&cur_sub) {
+            break;
+        }
         let Some((_, value)) = assignments
             .iter()
             .rev()

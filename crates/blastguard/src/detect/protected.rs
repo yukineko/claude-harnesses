@@ -1,5 +1,6 @@
-use super::words::first_shell_word;
+pub(super) mod operand;
 use super::{exclude, has_glob_meta, Ctx, Decision, Determination};
+use operand::{plain, unquoted_operand};
 
 /// Write is new/overwrite both. We stay conservative and only Deny the clearly
 /// destructive shapes: replacing a (non-config) file with empty content, or
@@ -174,6 +175,8 @@ const MAX_SYMLINK_HOPS: usize = 40;
 /// symlink loop, a `read_link`/`lstat` error other than "does not exist".
 pub(super) fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
     use std::path::{Component, Path, PathBuf};
+    let target = plain(target);
+    let target: &str = &target;
     if target.is_empty() || target.contains('$') || target.contains('`') {
         return None;
     }
@@ -292,6 +295,8 @@ symlink loop",
 /// [`launch_agents_new_file_ask`], checked first and NOT escapable through
 /// `confined_root`. That answer is an `Ask`, not a `Deny`.
 pub(super) fn system_path_block(action: &str, target: &str, ctx: &Ctx) -> Option<Decision> {
+    let target = plain(target);
+    let target: &str = &target;
     if let Some(ask) = launch_agents_new_file_ask(action, target) {
         return Some(ask);
     }
@@ -334,6 +339,8 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
 /// existence cannot be read (`symlink_metadata` fails with anything other
 /// than "not found") is also an Ask (CLAUDE.md §3).
 pub(super) fn launch_agents_new_file_ask(action: &str, target: &str) -> Option<Decision> {
+    let target = plain(target);
+    let target: &str = &target;
     let expanded;
     let target = match target.strip_prefix("~/") {
         Some(rest) => match std::env::var("HOME") {
@@ -511,6 +518,8 @@ pub(super) fn entry_landing(
     base: Option<&str>,
     no_deref: bool,
 ) -> Option<Determination<String>> {
+    let target = plain(target);
+    let target: &str = &target;
     // A bare name's parent is the cwd (`base`).
     let (parent, name) = target.rsplit_once('/').unwrap_or((".", target));
     if name.is_empty() || name == "." || name == ".." {
@@ -593,22 +602,6 @@ fn cwd_joined(ctx: &Ctx<'_>, path: &str) -> Option<String> {
     }
     let base = ctx.raw_base.as_deref().filter(|b| b.starts_with('/'))?;
     Some(format!("{}/{path}", base.trim_end_matches('/')))
-}
-
-/// The operand as the shell hands it to the command: quote removal done by the
-/// shell word parser ([`first_shell_word`]), so a PARTLY quoted word
-/// (`"settings".json`, `settings'.json'`, `"settings.json"''`) reads the same as
-/// a wholly quoted one. `None` when nothing changes, or when the result still
-/// needs real expansion (`$`, backtick) — those are left to the callers' own
-/// unresolvable-operand handling. A raw operand token keeps its quotes, so
-/// `"settings".json` matches no protected glob while the shell passes
-/// `settings.json` to the command (backlog f63b97b3, 5c848034).
-pub(super) fn unquoted_operand(word: &str) -> Option<String> {
-    let plain = first_shell_word(word)?;
-    if plain == word || plain.contains(['$', '`']) {
-        return None;
-    }
-    Some(plain)
 }
 
 /// Whether `hit` holds for the operand as spelled, as joined onto the cwd, or
@@ -788,6 +781,8 @@ on the command line, so blastguard refuses to guess and asks"
 /// what `Ask` buys is that the two situations stay distinguishable downstream
 /// instead of both being recorded as "blastguard knows this is bad".
 pub(super) fn protected_landing_block(ctx: &Ctx<'_>, action: &str, dir: &str) -> Option<Decision> {
+    let dir = plain(dir);
+    let dir: &str = &dir;
     if ctx.in_worktree_checkout(dir) {
         return None;
     }
@@ -882,6 +877,8 @@ pub(super) fn glob_literal_prefix(tok: &str) -> Option<String> {
 /// protected directory's children is a positively recognised hazard, not an
 /// unanalysable construct.
 pub(super) fn protected_glob_deny(action: &str, tok: &str) -> Option<Decision> {
+    let tok = plain(tok);
+    let tok: &str = &tok;
     if !has_glob_meta(tok) {
         return None;
     }

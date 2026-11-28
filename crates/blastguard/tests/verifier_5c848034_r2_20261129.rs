@@ -287,18 +287,18 @@ const BARE_TMP: &str =
 
 // ============================================ (1) --work-tree spellings
 hole!(h_wt_spaced: "", "{R}", "git --work-tree {C} rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r2): double-quoted --work-tree=\"~/.claude\" is allow, git rm -f deletes ~/.claude/settings.json"] h_wt_dquoted: "", "{R}", "git --work-tree=\"{C}\" rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r2): single-quoted --work-tree='~/.claude' is allow, git rm -f deletes ~/.claude/settings.json"] h_wt_squoted: "", "{R}", "git --work-tree='{C}' rm -q -f settings.json");
+hole!(h_wt_dquoted: "", "{R}", "git --work-tree=\"{C}\" rm -q -f settings.json");
+hole!(h_wt_squoted: "", "{R}", "git --work-tree='{C}' rm -q -f settings.json");
 hole!(h_wt_trailing_slash: "", "{R}", "git --work-tree={C}/ rm -q -f settings.json");
 hole!(h_wt_relative_dotdot: "", "{R}", "git --work-tree=../../.claude rm -q -f settings.json");
 hole!(h_wt_home_var: "", "{R}", "git --work-tree=$HOME/.claude rm -q -f settings.json");
 hole!(h_wt_home_var_quoted: "", "{R}", "git --work-tree=\"$HOME/.claude\" rm -q -f settings.json");
 hole!(h_wt_assigned_var: "", "{R}", "X={C}; git --work-tree=$X rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r2): --work-tree=$(...) is unresolvable yet allow (Soft skip), git rm -f deletes ~/.claude/settings.json"] h_wt_cmdsubst: "", "{R}", "git --work-tree=$(echo {C}) rm -q -f settings.json");
+hole!(h_wt_cmdsubst: "", "{R}", "git --work-tree=$(echo {C}) rm -q -f settings.json");
 hole!(h_wt_pwd: "", "{C}", "git --git-dir={R}/.git --work-tree=$PWD rm -q -f settings.json");
 hole!(h_wt_symlink: LINK, "{R}", "git --work-tree={B}/lnk rm -q -f settings.json");
 hole!(h_wt_env_quoted: "", "{R}", "GIT_WORK_TREE=\"{C}\" git rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r2): GIT_WORK_TREE=$(...) is unresolvable yet allow (Soft skip), git rm -f deletes ~/.claude/settings.json"] h_wt_env_cmdsubst: "", "{R}", "GIT_WORK_TREE=$(echo {C}) git rm -q -f settings.json");
+hole!(h_wt_env_cmdsubst: "", "{R}", "GIT_WORK_TREE=$(echo {C}) git rm -q -f settings.json");
 // Not kept as tests (observed with git 2.54.0 Apple Git-157, both with the
 // repository discovered from cwd {R} and named by `--git-dir={R}/.git` from
 // {B}): a command-line `core.worktree` (`-c`, `--config-env`,
@@ -308,17 +308,17 @@ hole!(#[ignore = "RED(5c848034-r2): GIT_WORK_TREE=$(...) is unresolvable yet all
 // `-ccore.worktree=` is rejected by git ("unknown option").
 
 // ============================================ --git-dir, work tree = cwd
-hole!(#[ignore = "RED(5c848034-r2): -C ~/.claude --git-dir=R (work tree = cwd) rm -f is allow, deletes ~/.claude/settings.json"] h_gitdir_c_claude_rm: "", "{R}", "git -C {C} --git-dir={R}/.git rm -q -f settings.json");
+hole!(h_gitdir_c_claude_rm: "", "{R}", "git -C {C} --git-dir={R}/.git rm -q -f settings.json");
 hole!(h_gitdir_env_c_claude_rm: "", "{R}", "GIT_DIR={R}/.git git -C {C} rm -q -f settings.json");
 hole!(h_gitdir_cd_checkout: "", "{R}", "cd {C} && git --git-dir={R}/.git checkout -f HEAD -- settings.json");
-hole!(#[ignore = "RED(5c848034-r2): -C ~/.claude --git-dir=R stash is allow, rewrites ~/.claude/settings.json"] h_gitdir_c_claude_stash: "", "{R}", "git -C {C} --git-dir={R}/.git stash -q");
-hole!(#[ignore = "RED(5c848034-r2): -C ~/.claude --git-dir=R mv is allow, moves ~/.claude/settings.json"] h_gitdir_c_claude_mv: "", "{R}", "git -C {C} --git-dir={R}/.git mv settings.json s2.json");
-hole!(#[ignore = "RED(5c848034-r2): -C ~/.claude --git-dir=R read-tree -u --reset is allow, rewrites ~/.claude"] h_gitdir_c_claude_read_tree: "", "{R}", "git -C {C} --git-dir={R}/.git read-tree -u --reset HEAD");
-hole!(#[ignore = "RED(5c848034-r2): -C ~/.claude --git-dir=R am is allow, creates ~/.claude/hooks/new.sh"] h_gitdir_c_claude_am: "", "{R}", "git -C {C} --git-dir={R}/.git am -q {B}/n.mbox");
+hole!(h_gitdir_c_claude_stash: "", "{R}", "git -C {C} --git-dir={R}/.git stash -q");
+hole!(h_gitdir_c_claude_mv: "", "{R}", "git -C {C} --git-dir={R}/.git mv settings.json s2.json");
+hole!(h_gitdir_c_claude_read_tree: "", "{R}", "git -C {C} --git-dir={R}/.git read-tree -u --reset HEAD");
+hole!(h_gitdir_c_claude_am: "", "{R}", "git -C {C} --git-dir={R}/.git am -q {B}/n.mbox");
 
 // ============================================ work tree = $HOME (ancestor)
 hole!(h_home_wt_checkout_f: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={H} checkout -f");
-hole!(#[ignore = "RED(5c848034-r2): --work-tree=$HOME (ancestor of ~/.claude) read-tree -u --reset is allow, rewrites ~/.claude/settings.json from the repo"] h_home_wt_read_tree: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={H} read-tree -u --reset HEAD");
+hole!(h_home_wt_read_tree: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={H} read-tree -u --reset HEAD");
 hole!(h_home_wt_reset_hard: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={H} reset -q --hard");
 // Not kept: `git -C {H} --git-dir={B}/dot.git checkout -f` (with or without
 // `-c core.bare=false`) — git refuses the bare repository ("this operation
@@ -326,17 +326,17 @@ hole!(h_home_wt_reset_hard: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={
 hole!(h_home_wt_rm_named: DOT, "{H}", "git --git-dir={B}/dot.git --work-tree={H} rm -q -f .claude/settings.json");
 
 // ============================================ (2) alias shadowing a builtin
-hole!(#[ignore = "RED(5c848034-r2): -c alias.merge-file=log (git ignores builtin-shadowing alias) makes merge-file allow, rewrites ~/.claude/settings.json"] h_alias_shadow_merge_file: "", "{R}", "git -c alias.merge-file=log merge-file {C}/settings.json {B}/mf/b.txt {B}/mf/o.txt");
-hole!(#[ignore = "RED(5c848034-r2): -c alias.bugreport=status makes bugreport -o ~/.claude/hooks allow, report file created there"] h_alias_shadow_bugreport: "", "{R}", "git -c alias.bugreport=status bugreport -o {K}");
-hole!(#[ignore = "RED(5c848034-r2): -c alias.unpack-file=log makes unpack-file in ~/.claude allow, .merge_file_* created there"] h_alias_shadow_unpack_file: "", "{C}", "git --git-dir={R}/.git -c alias.unpack-file=log unpack-file HEAD:settings.json");
-hole!(#[ignore = "RED(5c848034-r2): -c alias.interpret-trailers=log makes interpret-trailers --in-place ~/.claude/settings.json allow"] h_alias_shadow_interpret_trailers: "", "{R}", "git -c alias.interpret-trailers=log interpret-trailers --in-place --trailer a=b {C}/settings.json");
-hole!(#[ignore = "RED(5c848034-r2): alias persisted in repo config (mf = merge-file ~/.claude/settings.json) makes `git mf b o` allow"] h_alias_from_repo_config: "git -C {R} config alias.mf 'merge-file {C}/settings.json'", "{R}", "git mf {B}/mf/b.txt {B}/mf/o.txt");
+hole!(h_alias_shadow_merge_file: "", "{R}", "git -c alias.merge-file=log merge-file {C}/settings.json {B}/mf/b.txt {B}/mf/o.txt");
+hole!(h_alias_shadow_bugreport: "", "{R}", "git -c alias.bugreport=status bugreport -o {K}");
+hole!(h_alias_shadow_unpack_file: "", "{C}", "git --git-dir={R}/.git -c alias.unpack-file=log unpack-file HEAD:settings.json");
+hole!(h_alias_shadow_interpret_trailers: "", "{R}", "git -c alias.interpret-trailers=log interpret-trailers --in-place --trailer a=b {C}/settings.json");
+hole!(h_alias_from_repo_config: "git -C {R} config alias.mf 'merge-file {C}/settings.json'", "{R}", "git mf {B}/mf/b.txt {B}/mf/o.txt");
 
 // ============================================ push spellings
-hole!(#[ignore = "RED(5c848034-r2): git push 'file://~/.claude/hooks/r.git' (quoted URL) is allow, writes the repo under ~/.claude"] h_push_squoted_file_url: BARE_IN_K, "{R}", "git push -q 'file://{K}/r.git' main");
+hole!(h_push_squoted_file_url: BARE_IN_K, "{R}", "git push -q 'file://{K}/r.git' main");
 hole!(h_push_dquoted_path: BARE_IN_K, "{R}", "git push -q \"{K}/r.git\" main");
-hole!(#[ignore = "RED(5c848034-r2): git push <remote name> whose configured url is under ~/.claude is allow"] h_push_named_remote: "git init -q --bare {K}/r.git && git -C {R} remote add bk {K}/r.git", "{R}", "git push -q bk main");
-hole!(#[ignore = "RED(5c848034-r2): git push r.git (slash-less local path) from cwd ~/.claude/hooks is allow"] h_push_bare_name_in_cwd: BARE_IN_K, "{R}", "cd {K} && git --git-dir={R}/.git push -q r.git main");
+hole!(h_push_named_remote: "git init -q --bare {K}/r.git && git -C {R} remote add bk {K}/r.git", "{R}", "git push -q bk main");
+hole!(h_push_bare_name_in_cwd: BARE_IN_K, "{R}", "cd {K} && git --git-dir={R}/.git push -q r.git main");
 hole!(h_push_tilde: BARE_IN_K, "{R}", "git push -q ~/.claude/hooks/r.git main");
 
 // ============================================ (4) quoted glob destinations
@@ -348,14 +348,14 @@ hole!(h_cp_quoted_dir_glob_rel: "", "{C}", "cp {B}/mf/o.txt \"hooks\"/*.sh");
 // ============================================ ~/.claude is itself a repo
 hole!(h_crepo_reset_hard: CREPO, "{R}", "git -C {C} reset -q --hard");
 hole!(h_crepo_checkout_dot: CREPO, "{R}", "git -C {C} checkout -- .");
-hole!(#[ignore = "RED(5c848034-r2): ~/.claude is a repo: git -C ~/.claude stash is allow, reverts ~/.claude/settings.json"] h_crepo_stash: CREPO, "{R}", "git -C {C} stash -q");
+hole!(h_crepo_stash: CREPO, "{R}", "git -C {C} stash -q");
 hole!(h_crepo_clean: CREPO, "{R}", "git -C {C} clean -fdq");
-hole!(#[ignore = "RED(5c848034-r2): ~/.claude is a repo: git -C ~/.claude rm -f settings.json is allow"] h_crepo_rm: CREPO, "{R}", "git -C {C} rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r2): ~/.claude is a repo: git -C ~/.claude mv hooks/pre.sh is allow"] h_crepo_mv: CREPO, "{R}", "git -C {C} mv hooks/pre.sh hooks/p2.sh");
-hole!(#[ignore = "RED(5c848034-r2): ~/.claude is a repo: git -C ~/.claude sparse-checkout set is allow, removes tracked files"] h_crepo_sparse: CREPO, "{R}", "git -C {C} sparse-checkout set nothing");
+hole!(h_crepo_rm: CREPO, "{R}", "git -C {C} rm -q -f settings.json");
+hole!(h_crepo_mv: CREPO, "{R}", "git -C {C} mv hooks/pre.sh hooks/p2.sh");
+hole!(h_crepo_sparse: CREPO, "{R}", "git -C {C} sparse-checkout set nothing");
 hole!(h_crepo_restore: CREPO, "{R}", "git -C {C} restore settings.json");
 hole!(h_crepo_cd_reset: CREPO, "{R}", "cd {C} && git reset -q --hard");
-hole!(#[ignore = "RED(5c848034-r2): ~/.claude is a repo: git -C ~/.claude am is allow, creates hooks/new.sh"] h_crepo_am: CREPO, "{R}", "git -C {C} am -q {B}/n.mbox");
+hole!(h_crepo_am: CREPO, "{R}", "git -C {C} am -q {B}/n.mbox");
 
 // ============================================ (3) FP: worktree add
 fp!(fp_wt_add_sibling_from_repo: "", "{R}", "git worktree add -q ../x");
@@ -398,10 +398,10 @@ fp!(fp_unm_mktree_w: "", "{W}", "git mktree < /dev/null");
 fp!(fp_unm_replace_list_r: "", "{R}", "git replace -l");
 fp!(fp_unm_difftool_help_w: "", "{W}", "git difftool --tool-help");
 fp!(fp_unm_lfs_ls_files_r: "", "{R}", "git lfs ls-files");
-fp!(#[ignore = "RED(5c848034-r2): regression vs base — new unmodelled-verb cwd landing Asks read-only fast-export in main checkout's .claude/"] fp_unm_fast_export_main_claude_dir: "", "{R}/.claude", "git fast-export HEAD");
-fp!(#[ignore = "RED(5c848034-r2): regression vs base — new unmodelled-verb cwd landing Asks submodule status in main checkout's .claude/"] fp_unm_submodule_status_main_claude_dir: "", "{R}/.claude", "git submodule status");
-fp!(#[ignore = "RED(5c848034-r2): regression vs base — new unmodelled-verb cwd landing Asks read-only fast-export with cwd ~/.claude (a repo)"] fp_unm_fast_export_in_claude_repo: CREPO, "{C}", "git fast-export HEAD");
-fp!(#[ignore = "RED(5c848034-r2): regression vs base — new unmodelled-verb cwd landing Asks submodule status with cwd ~/.claude (a repo)"] fp_unm_submodule_status_in_claude_repo: CREPO, "{C}", "git submodule status");
+fp!(fp_unm_fast_export_main_claude_dir: "", "{R}/.claude", "git fast-export HEAD");
+fp!(fp_unm_submodule_status_main_claude_dir: "", "{R}/.claude", "git submodule status");
+fp!(fp_unm_fast_export_in_claude_repo: CREPO, "{C}", "git fast-export HEAD");
+fp!(fp_unm_submodule_status_in_claude_repo: CREPO, "{C}", "git submodule status");
 
 // ============================================ FP: quoted cp / tee destinations
 fp!(fp_q_cp_space_name_w: "", "{W}", "cp src/lib.rs \"sub/new file.rs\"");
@@ -427,11 +427,11 @@ fp!(fp_dotfiles_add: "git init -q --bare {H}/.dotfiles && echo x > {H}/.bashrc",
 fp!(fp_dotfiles_status: "git init -q --bare {H}/.dotfiles", "{H}", "git --git-dir={H}/.dotfiles --work-tree={H} status");
 
 // ============================================ (4) quoted system destinations
-sys!(#[ignore = "RED(5c848034-r2): cp to \"/etc\"/x is allow while /etc/x is deny (system-dir check skips quote removal)"] sys_cp_etc: "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt \"/etc\"/bg5c84");
-sys!(#[ignore = "RED(5c848034-r2): cp to \"/usr/bin\"/x is allow while /usr/bin/x is deny"] sys_cp_usr_bin: "{R}", "cp {B}/mf/o.txt /usr/bin/bg5c84", "cp {B}/mf/o.txt \"/usr/bin\"/bg5c84");
-sys!(#[ignore = "RED(5c848034-r2): tee \"/etc\"/x is allow while tee /etc/x is deny"] sys_tee_etc: "{R}", "echo x | tee /etc/bg5c84", "echo x | tee \"/etc\"/bg5c84");
-sys!(#[ignore = "RED(5c848034-r2): mv to '/usr/local'/bin/x is allow while /usr/local/bin/x is deny"] sys_mv_usr_local_bin: "{R}", "mv {B}/mf/o.txt /usr/local/bin/bg5c84", "mv {B}/mf/o.txt '/usr/local'/bin/bg5c84");
+sys!(sys_cp_etc: "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt \"/etc\"/bg5c84");
+sys!(sys_cp_usr_bin: "{R}", "cp {B}/mf/o.txt /usr/bin/bg5c84", "cp {B}/mf/o.txt \"/usr/bin\"/bg5c84");
+sys!(sys_tee_etc: "{R}", "echo x | tee /etc/bg5c84", "echo x | tee \"/etc\"/bg5c84");
+sys!(sys_mv_usr_local_bin: "{R}", "mv {B}/mf/o.txt /usr/local/bin/bg5c84", "mv {B}/mf/o.txt '/usr/local'/bin/bg5c84");
 sys!(sys_install_usr_bin: "{R}", "install {B}/mf/o.txt /usr/bin/bg5c84", "install {B}/mf/o.txt /usr/\"bin\"/bg5c84");
 sys!(sys_git_init_usr: "{R}", "git init -q /usr/bg5c84", "git init -q \"/usr\"/bg5c84");
-sys!(#[ignore = "RED(5c848034-r2): git --work-tree=\"/etc\" rm -f is allow while --work-tree=/etc is deny"] sys_git_wt_etc: "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=\"/etc\" rm -q -f bg5c84");
-sys!(#[ignore = "RED(5c848034-r2): cp to \"/etc\"/*.conf is ask while /etc/*.conf is deny (glob/system deny skips quote removal)"] sys_cp_etc_glob: "{R}", "cp {B}/mf/o.txt /etc/*.conf", "cp {B}/mf/o.txt \"/etc\"/*.conf");
+sys!(sys_git_wt_etc: "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=\"/etc\" rm -q -f bg5c84");
+sys!(sys_cp_etc_glob: "{R}", "cp {B}/mf/o.txt /etc/*.conf", "cp {B}/mf/o.txt \"/etc\"/*.conf");

@@ -46,6 +46,7 @@
 //! an Ask, and so is a `-C` directory that cannot be placed while a relative
 //! write target is being judged.
 
+mod git_config;
 mod unmodelled;
 
 use harness_core::verdict::Determination;
@@ -53,8 +54,8 @@ use harness_core::verdict::Determination;
 use super::super::git::argv::{parse, Opt, Parsed, Spec};
 use super::super::git::{git_global_config_assignments, git_moved_dir};
 use super::super::protected::{
-    physical_landing, protected_glob_deny, protected_landing_block, protected_path_block,
-    protected_path_lexical_block, system_landing_block, system_path_block,
+    physical_landing, protected_ancestor_landing_ask, protected_glob_deny, protected_landing_block,
+    protected_path_block, protected_path_lexical_block, system_landing_block, system_path_block,
 };
 use super::super::words::{first_shell_word, normalized_command};
 use super::super::{has_unresolvable_expansion, Ctx, Decision};
@@ -71,6 +72,9 @@ enum Kind {
     /// A directory is populated or created (`format-patch -o D`, `worktree
     /// add D`, `--prefix=D/`, `init D`, `clone S D`).
     Dir,
+    /// The work tree of a verb that writes it: a [`Kind::Dir`] that is also
+    /// judged as a directory above `~/.claude`.
+    Tree,
 }
 
 /// Which directory a relative target is relative to.
@@ -435,6 +439,27 @@ fn global_git_dir(globals: &[&str]) -> Vec<Found> {
         .collect()
 }
 
+/// The values of `--work-tree=V` / `--work-tree V` among git's global options.
+fn global_work_tree_values(globals: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < globals.len() {
+        let g = globals[i];
+        if g == "--work-tree" {
+            if let Some(v) = globals.get(i + 1) {
+                out.push((*v).to_string());
+            }
+            i += 2;
+        } else {
+            if let Some(v) = g.strip_prefix("--work-tree=") {
+                out.push(v.to_string());
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
 /// The words after the subcommand, read against `table`; `guess` collects
 /// every possible path word when the reading is undetermined.
 fn read<'a>(args: &[&'a str], table: &[Opt], digits: bool) -> Parsed<'a> {
@@ -475,6 +500,7 @@ fn git_write_targets(
     sub: &str,
     args: &[&str],
     judge_unmodelled: bool,
+    cfg: &git_config::GitConfig,
 ) -> Vec<Target> {
     let mut out = Vec::new();
     // An env prefix repoints git's repository / work tree. `init` creates the
@@ -497,11 +523,37 @@ fn git_write_targets(
             mode: Mode::Soft,
         });
     }
+    let read_only = unmodelled::is_read_only(sub);
+    let tree_kind = if unmodelled::writes_work_tree(sub) {
+        Kind::Tree
+    } else {
+        Kind::Dir
+    };
     if let Some(wt) = &env.work_tree {
         out.push(Target {
             action: "GIT_WORK_TREE".to_string(),
             value: Some(wt.clone()),
-            kind: Kind::Dir,
+            kind: tree_kind,
+            base: Base::Cwd,
+            // A value only known at run time cannot be cleared: Ask, unless
+            // the verb only reads.
+            mode: if !read_only && has_unresolvable_expansion(wt) {
+                Mode::Exact
+            } else {
+                Mode::Soft
+            },
+        });
+    }
+    // No `--work-tree` / `GIT_WORK_TREE`: git's work tree is the cwd (moved by
+    // `-C`) — the repository's top, or with only `--git-dir` the cwd itself. A
+    // verb that writes the work tree writes there; `~/.claude` being a repo, or
+    // a `--git-dir` repository pointed at it, makes that a protected landing.
+    if !explicit_work_tree && sub != "init" && unmodelled::writes_work_tree(sub) {
+        let git_dir_only = !git_dirs.is_empty();
+        out.push(Target {
+            action: "git (work tree = cwd)".to_string(),
+            value: Some(".".to_string()),
+            kind: if git_dir_only { Kind::Tree } else { Kind::Dir },
             base: Base::Cwd,
             mode: Mode::Soft,
         });
@@ -511,18 +563,21 @@ fn git_write_targets(
     // (`mv`, `stash`, `am`, `read-tree -u`, `rm -f`, …): the work tree is judged
     // as a landing, exactly as `GIT_WORK_TREE` is. `checkout-index` has its own
     // arm below.
-    if sub != "checkout-index" && !unmodelled::is_read_only(sub) {
-        if globals
-            .iter()
-            .any(|g| *g == "--work-tree" || g.starts_with("--work-tree="))
-        {
+    if sub != "checkout-index" && !read_only {
+        for wt in global_work_tree_values(globals) {
             out.push(Target {
                 action: "git --work-tree".to_string(),
                 value: Some(".".to_string()),
-                kind: Kind::Dir,
+                kind: tree_kind,
                 base: Base::WorkTree,
                 mode: Mode::Soft,
             });
+            // The value itself is only known at run time (`$(…)`): the work
+            // tree cannot be placed, so what git writes is undetermined — Ask.
+            let plain = first_shell_word(&wt).unwrap_or_else(|| wt.clone());
+            if has_unresolvable_expansion(&plain) {
+                out.push(Target::exact("git --work-tree", Some(wt), Kind::Dir));
+            }
         }
         for a in git_global_config_assignments(globals) {
             let a = first_shell_word(a).unwrap_or_else(|| a.to_string());
@@ -610,7 +665,7 @@ fn git_write_targets(
                 out.push(Target {
                     action: "git checkout-index".to_string(),
                     value: Some(".".to_string()),
-                    kind: Kind::Dir,
+                    kind: Kind::Tree,
                     base: Base::WorkTree,
                     mode: Mode::Exact,
                 });
@@ -707,18 +762,32 @@ fn git_write_targets(
                 .hits_of("repo")
                 .next()
                 .and_then(|h| h.value)
-                .or_else(|| p.operands.first().copied());
-            if let Some(r) = remote {
-                let r = r.strip_prefix("file://").unwrap_or(r);
-                if !r.contains("://") && (r.contains('/') || r.starts_with(['.', '~'])) {
-                    out.push(Target {
-                        action: "git push".to_string(),
-                        value: Some(r.to_string()),
-                        kind: Kind::Dir,
-                        base: Base::Cwd,
-                        mode: Mode::Soft,
-                    });
+                .or_else(|| p.operands.first().copied())
+                .map(|r| first_shell_word(r).unwrap_or_else(|| r.to_string()));
+            // A configured remote name stands for its URL(s); a word that is not
+            // configured may be a local path relative to the cwd (`r.git`); no
+            // remote at all pushes to `origin`.
+            let name = remote.as_deref().unwrap_or("origin");
+            let configured: Vec<&str> = cfg.urls_of(name).collect();
+            let candidates: Vec<String> = if configured.is_empty() {
+                remote.into_iter().collect()
+            } else {
+                configured.iter().map(|u| (*u).to_string()).collect()
+            };
+            for c in candidates {
+                let c = first_shell_word(&c).unwrap_or(c);
+                let c = c.strip_prefix("file://").unwrap_or(&c).to_string();
+                // A network URL or an scp-like `host:path` is not a local path.
+                if c.is_empty() || c.contains("://") || c.contains(':') {
+                    continue;
                 }
+                out.push(Target {
+                    action: "git push".to_string(),
+                    value: Some(c),
+                    kind: Kind::Dir,
+                    base: Base::Cwd,
+                    mode: Mode::Soft,
+                });
             }
         }
         "format-patch" => {
@@ -759,15 +828,19 @@ fn git_write_targets(
             // A verb the table has no row for: every word that could be a
             // path is judged (an Ask on a protected / system landing).
             if judge_unmodelled && !unmodelled::is_ordinary(sub) {
-                // Helpers drop scratch files in the cwd (`unpack-file` writes
-                // `.merge_file_*` there), so the cwd is a landing too.
-                out.push(Target {
-                    action: format!("git {sub} (unmodelled subcommand, cwd)"),
-                    value: Some(".".to_string()),
-                    kind: Kind::Dir,
-                    base: Base::Cwd,
-                    mode: Mode::Guess,
-                });
+                // Helpers that drop a file in the cwd without naming it
+                // (`unpack-file` writes `.merge_file_*`): the cwd is a landing.
+                // A verb that only reads or prints (`fast-export`,
+                // `submodule status`) is not.
+                if unmodelled::writes_cwd(sub) {
+                    out.push(Target {
+                        action: format!("git {sub} (unmodelled subcommand, cwd)"),
+                        value: Some(".".to_string()),
+                        kind: Kind::Dir,
+                        base: Base::Cwd,
+                        mode: Mode::Guess,
+                    });
+                }
                 for w in guess_words(args) {
                     out.push(Target {
                         action: format!("git {sub} (unmodelled subcommand)"),
@@ -806,7 +879,12 @@ fn without_work_tree<'a>(globals: &[&'a str]) -> Vec<&'a str> {
 /// directory ITSELF being / holding protected paths, at the spelling and at
 /// the place its symlinks lead (`protected_landing_block`), and a system
 /// directory (`system_landing_block`).
-fn dir_block(ctx: &Ctx<'_>, action: &str, dir: &str) -> Option<Decision> {
+///
+/// `creates_child` is true when `dir` names a NEW directory git creates (a
+/// worktree, a clone, an init target): its parent is then populated too. A
+/// word that is merely GUESSED to be a path (a revision `HEAD`, a verb
+/// `status`) names nothing git creates, so it is not.
+fn dir_block(ctx: &Ctx<'_>, action: &str, dir: &str, creates_child: bool) -> Option<Decision> {
     if let Some(d) = protected_path_block(ctx, action, dir) {
         return Some(d);
     }
@@ -820,9 +898,11 @@ fn dir_block(ctx: &Ctx<'_>, action: &str, dir: &str) -> Option<Decision> {
         // A NEW directory created directly inside a directory that holds
         // protected paths (`git worktree add ../w3` from `-C ~/.claude/hooks`
         // creates `~/.claude/w3`) populates that protected container.
-        if let Some((parent, _)) = real.trim_end_matches('/').rsplit_once('/') {
-            if let Some(d) = protected_landing_block(ctx, action, parent) {
-                return Some(d);
+        if creates_child {
+            if let Some((parent, _)) = real.trim_end_matches('/').rsplit_once('/') {
+                if let Some(d) = protected_landing_block(ctx, action, parent) {
+                    return Some(d);
+                }
             }
         }
     }
@@ -858,7 +938,27 @@ pub(in crate::detect) fn git_write_target_verdict(
     // `-c alias.X=VERB …`: the alias hides the verb, so the verb it stands for
     // is judged too. The alias NAME is judged as an unmodelled verb only when
     // what it stands for is not itself a known verb (an alias to `log` is `log`).
-    let alias = unmodelled::resolve_alias(globals, sub, args);
+    let cwd_globals = without_work_tree(globals);
+    let cwd_placed = placed(ctx, &cwd_globals);
+    // Aliases and remote URLs stored in the repository / user config are not on
+    // the command line; read them statically, only for a verb that can be an
+    // alias or a push.
+    let cfg = if sub == "push" || !unmodelled::is_builtin(sub) {
+        let cwd = match &cwd_placed {
+            Ok(c) => c.raw_base.clone(),
+            Err(_) => ctx.raw_base.clone(),
+        };
+        let git_dir = global_git_dir(globals)
+            .into_iter()
+            .flatten()
+            .next()
+            .or_else(|| env.git_dir.clone())
+            .map(|g| first_shell_word(&g).unwrap_or(g));
+        git_config::read(cwd.as_deref(), git_dir.as_deref())
+    } else {
+        git_config::GitConfig::default()
+    };
+    let alias = unmodelled::resolve_alias(globals, sub, args, &cfg.aliases);
     let name_is_unknown_verb = alias
         .as_ref()
         .is_none_or(|(verb, _)| !unmodelled::is_ordinary(verb));
@@ -869,6 +969,7 @@ pub(in crate::detect) fn git_write_target_verdict(
         sub,
         args,
         name_is_unknown_verb,
+        &cfg,
     );
     if let Some((verb, verb_args)) = alias {
         let verb_args: Vec<&str> = verb_args.iter().map(String::as_str).collect();
@@ -879,13 +980,12 @@ pub(in crate::detect) fn git_write_target_verdict(
             &verb,
             &verb_args,
             true,
+            &cfg,
         ));
     }
     if targets.is_empty() {
         return Decision::Allow;
     }
-    let cwd_globals = without_work_tree(globals);
-    let cwd_placed = placed(ctx, &cwd_globals);
     // The work tree: `--work-tree` wins over `GIT_WORK_TREE`, as in git.
     let mut wt_globals: Vec<String> = globals.iter().map(|g| (*g).to_string()).collect();
     if let (false, Some(wt)) = (global_work_tree, &env.work_tree) {
@@ -943,7 +1043,12 @@ in could not be placed ({why}) — blastguard refuses to guess where it is writt
         };
         let protected = match kind {
             Kind::File => protected_path_block(wctx, &action, &path),
-            Kind::Dir => dir_block(wctx, &action, &path),
+            Kind::Dir => dir_block(wctx, &action, &path, mode == Mode::Exact),
+            // A work tree that a work-tree-writing verb fills: also an ASK when
+            // it is a directory ABOVE ~/.claude (the verb can rewrite
+            // `.claude/settings.json` through a tracked name).
+            Kind::Tree => dir_block(wctx, &action, &path, false)
+                .or_else(|| protected_ancestor_landing_ask(wctx, &action, &path)),
         };
         if let Some(d) = protected
             .or_else(|| protected_glob_deny(&action, &path))

@@ -186,19 +186,22 @@ pub(super) fn git_moved_dir(
 ) -> Determination<Option<String>> {
     let mut cur: Option<String> = base.map(str::to_string);
     let mut moved = false;
-    let mut work_tree: Option<&str> = None;
+    let mut work_tree: Option<String> = None;
     let mut i = 0;
     while i < globals.len() {
-        let t = globals[i];
-        let value = if t == "-C" || t == "--work-tree" {
+        // Quote removal happens once, here: every value below is what the
+        // shell hands to git (`--work-tree="/etc"` is `--work-tree=/etc`).
+        let t = super::protected::operand::plain(globals[i]);
+        let t: &str = &t;
+        let value: String = if t == "-C" || t == "--work-tree" {
             let Some(v) = globals.get(i + 1) else {
                 return Determination::undetermined(format!("git {t} has no value"));
             };
             i += 2;
-            *v
+            super::protected::operand::plain(v).into_owned()
         } else if let Some(v) = t.strip_prefix("--work-tree=") {
             i += 1;
-            v
+            v.to_string()
         } else {
             if t.starts_with("-C") && t.len() > 2 {
                 return Determination::undetermined("glued git -C<dir> names no directory");
@@ -207,7 +210,7 @@ pub(super) fn git_moved_dir(
             continue;
         };
         if t == "-C" {
-            cur = match scope.lexical_absolute(value, cur.as_deref()) {
+            cur = match scope.lexical_absolute(&value, cur.as_deref()) {
                 Determination::Known(d) => Some(d),
                 Determination::Undetermined(u) => return Determination::Undetermined(u),
             };
@@ -217,7 +220,7 @@ pub(super) fn git_moved_dir(
         }
     }
     if let Some(wt) = work_tree {
-        return match scope.lexical_absolute(wt, cur.as_deref()) {
+        return match scope.lexical_absolute(&wt, cur.as_deref()) {
             Determination::Known(d) => Determination::known(Some(d)),
             Determination::Undetermined(u) => Determination::Undetermined(u),
         };

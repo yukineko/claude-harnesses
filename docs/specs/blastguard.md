@@ -254,6 +254,19 @@ forge・condukt のスケジューラが再利用）。
   `git apply --directory=D` は着地点が D なので `$HOME` 実行でも祖先 Ask にしない。`protected_path_block` は
   quote 除去後の字面も判定（cp/mv/ln/tee/install/rsync の宛先を一本化）。`git push <path>` の宛先 path、
   未モデル verb の cwd、新規 dir の親が保護 container（`-C ~/.claude/hooks worktree add ../w3`）も着地点として判定。
+  **round 2（0.2.1058）**: quote 除去の入口を `detect/operand.rs`（`plain` / `unquoted_operand`、shell word parser
+  `first_shell_word` 経由）に一本化し、system dir・保護 path・landing・`git_moved_dir` の全判定が除去後の字面を見る
+  （`cp x "/etc"/f`・`tee "/etc"/f`・`git --work-tree="/etc" rm`・`cp x "/etc"/*.conf` は非 quote と同じ verdict）。
+  実行時展開で解決できない `--work-tree` / `GIT_WORK_TREE` は Ask。`--git-dir` のみ（`--work-tree` 無し）のとき
+  work tree = cwd（`-C` 反映）とみなし、cwd が保護 root 自身か祖先なら work tree を書く verb
+  （`unmodelled::WORKTREE_WRITERS`）は Ask。git は builtin 名の alias を無視するので `unmodelled::BUILTINS`（静的表）
+  にある名前は alias 展開しない。repo の `.git/config`・`~/.gitconfig`（`write_targets/git_config.rs`、subprocess 無し）
+  の `[alias]` と `[remote "N"]` url/pushurl を静的に読み、保存 alias（`git mf`）と push 先 remote 名を解決する
+  （`st=status` のような既知 verb への alias は FP にしない）。push は quote 付き `file://` URL・保護 root 配下を指す
+  remote 名・slash 無しの相対 `r.git`（cwd 起点）も着地点候補。`~/.claude` 自身が repo のとき `git -C ~/.claude`
+  の `stash`/`rm -f`/`mv`/`sparse-checkout set`/`am` は Ask。cwd を着地点にするのは実際に cwd へ書く verb
+  （`unmodelled::CWD_WRITERS`: `unpack-file`・`bugreport`・`diagnose`）だけで、`fast-export` / `submodule status` を
+  保護 cwd で実行しても Allow。新規 dir の親 container 規則（`dir_block`）は Exact mode（実際に作る dir）のみ。
   **残余**: alias 解決は `fileops/write_targets` の write target 判定のみ（他の git arm は alias 名のまま）。
   **残余**: `checkout-index --prefix=REL` で `--work-tree` 無しのとき cwd 起点で判定する（git は work tree top 起点なので
   cwd が work tree の subdir の場合は未検証）。generic の `--output` 走査と `archive -o` は未知 option を読み飛ばす

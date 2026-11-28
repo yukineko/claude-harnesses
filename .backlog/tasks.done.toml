@@ -98569,3 +98569,73 @@ rev = "986639d6c8ca9b1ff011054a8d0d611696c9559f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b6726716"
+title = "blastguard: /flow driver session denies the repo's own tracked-clean scripts/ (python3 -m pytest scripts/test_*.py; main-tree scripts/ run from own worktree, e.g. cd main && (scripts/rollout-plugins.sh ...)) — ruling 2026-11-28 「driverで repo スクリプトを許可 (推奨)」: extend driver_trusts_program like a50833d7; dirty/untracked stay Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795832134
+updated_at = 1795832667
+weight = 0.0
+issue_number = 2013
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2013"
+issue_closed_at = 1795832669
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_driver_repo_scripts_allow -- --ignored"
+rev = "1fd1f0082ea3ed8de157368507b6da381bb84475"
+observed_at = 1795832134
+detail = """
+exit 101: v0.2.997 (/Users/yuki/src/.harness-worktrees/red-driver-scripts/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.60s
+     Running tests/backlog_20261128_driver_repo_scripts_allow.rs (target/debug/deps/backlog_20261128_driver_repo_scripts_allow-8a8db73da0f8e6b1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_driver_repo_scripts_allow`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_driver_repo_scripts_allow"
+exit = 0
+passed = 11
+rev = "e87f7b4e6a1f73ee398b606b46bc37cdb579c3f7"
+observed_at = 1795832664
+output_digest = "sha256:cd9df6285ba4480b8a5bae9021010505b1f80bf6f24911319cb26613c68bc7f9"
+excerpt = """
+
+running 11 tests
+test control_non_driver_session_still_asks ... ok
+test control_driver_tracked_harmful_text_script_follows_existing_b5 ... ok
+test control_driver_tracked_outside_scripts_dir_pytest_not_allow ... ok
+test control_driver_script_outside_repo_not_allow ... ok
+test control_driver_staged_but_uncommitted_script_not_allow ... ok
+test driver_own_worktree_scripts_direct_bash_python_are_allow ... ok
+test control_driver_dirty_script_not_allow ... ok
+test control_driver_untracked_script_not_allow ... ok
+test red_driver_cd_main_tree_subshell_script_is_allow ... ok
+test red_driver_own_worktree_python_m_pytest_tracked_scripts_test_is_allow ... ok
+test red_driver_main_tree_scripts_four_shapes_are_allow ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests/backlog_20261128_driver_repo_scripts_allow.rs (target/debug/deps/backlog_20261128_driver_repo_scripts_allow-4eedbaeac09379dd)
+"""
+
+[task.closure.red]
+rev = "1fd1f0082ea3ed8de157368507b6da381bb84475"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

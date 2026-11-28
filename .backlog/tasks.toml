@@ -741,3 +741,34 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running tests/verifier_3de4729f_r4_20261128.rs (target/debug/deps/verifier_3de4729f_r4_20261128-1e0f950ddfe5d99f)
 error: test failed, to rerun pass `-p blastguard --test verifier_3de4729f_r4_20261128`"""
+
+[[task]]
+id = "badf720d"
+title = "blastguard detector: 18 pre-existing write shapes still reach ~/.claude or /etc after 5c848034 (exported GIT_WORK_TREE, stored core.worktree, aliases from XDG/include/includeIf/HOME= config, stored ! aliases, alias to destructive arms, $'..' system dirs Ask not Deny, brace FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Verifier r3 of 5c848034 (bd1bdd7a9), crates/blastguard/tests/verifier_5c848034_r3_20261129.rs, 18 ignored REDs, all also failing on base 84f801e26. Real writes under fake ~/.claude observed for: export GIT_WORK_TREE (incl. =/etc judged allow), repo-config core.worktree, alias.hh='reset --hard' in ~/.config/git/config / include.path / includeIf / HOME=X, stored '!' alias writing settings.json; stored alias to reset --hard / -c alias.pf='push --force' allow while plain is deny/ask; $'/etc' work-tree, glob /et?/f Ask instead of Deny; FP: cp src/lib.rs sub/{a,b}.rs Ask. Direction: track exported env through the AST; resolve aliases before arm dispatch; read every config source git reads or Ask when an alias name is unresolvable."
+created_at = 1795888611
+updated_at = 1795888611
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier_5c848034_r3_20261129 -- --ignored"
+rev = "e9385cad07d976a29aa75811ee1eadd7273e68fd"
+observed_at = 1795888611
+detail = """
+exit 101:   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/verifier_5c848034_r3_20261129.rs (target/debug/deps/verifier_5c848034_r3_20261129-541e77d9a2c3dd53)
+error: test failed, to rerun pass `-p blastguard --test verifier_5c848034_r3_20261129`"""

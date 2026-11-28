@@ -487,7 +487,7 @@ fn r15_dotgit_forged_inside_harness_container() {
 /// Allow without a table. Measured at 97d4b7709: Write => deny, `cp ../y/.git
 /// .git` => allow, `git worktree repair` => allow.
 #[test]
-#[ignore = "RED: detector — forging a linked-worktree .git is Allow; filed separately"]
+#[ignore = "RED(a80a1fea): detector — forging a linked-worktree .git is Allow; filed separately"]
 fn r15_dotgit_forging_steps_are_not_allow() {
     let h = env_prod("cfharm");
     let f = h.home.join("src").join(".harness-worktrees").join("f");

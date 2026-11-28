@@ -883,6 +883,12 @@ impl SafeRoots {
         self
     }
 
+    /// Was this model built for a live registered `/flow` driver session
+    /// ([`SafeRoots::with_driver_programs`])? `false` for every other model.
+    pub(crate) fn is_driver_session(&self) -> bool {
+        self.driver_programs.is_some()
+    }
+
     /// Is `real` (a CANONICAL path, symlinks already resolved) a program file
     /// a live `/flow` driver session may run without a Table B.5 objection?
     ///
@@ -902,6 +908,9 @@ impl SafeRoots {
     ///   cache pointing elsewhere is judged by its target (and not trusted).
     ///
     /// Anything else, including any IO failure, is `false`.
+    ///
+    /// (Repo `scripts/` files, user ruling 2026-11-28, are judged separately
+    /// by `b5::driver_repo_script`, which needs git.)
     pub(crate) fn driver_trusts_program(&self, real: &str) -> bool {
         let Some(d) = &self.driver_programs else {
             return false;

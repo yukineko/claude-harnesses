@@ -154,14 +154,16 @@
 use std::cell::Cell;
 
 use super::{
-    analyze, program_source, support::is_echo_option, Analysis, Cause, Context, ProgramSource,
-    RedirOp, RedirTarget, SimpleCommand, StdinSource, Value, Word,
+    analyze, program_source, support::is_echo_option, Analysis, Cause, Context, FdTarget,
+    ProgramSource, RedirOp, RedirTarget, SimpleCommand, StdinSource, Value, Word,
 };
 use crate::detect::VerdictAcc;
 use crate::model::Decision;
 
 mod closed_heredoc;
 mod determined;
+mod driver_repo;
+use driver_repo::{driver_pytest_trusted, driver_repo_script, git_probe};
 mod env;
 mod sudo;
 use determined::{
@@ -701,7 +703,17 @@ fn classify_walk(
         return deny;
     }
     match (fam, source) {
-        (_, ProgramSource::Undetermined(r)) => undetermined(format_args!("`{base}`: {r}")),
+        (fam, ProgramSource::Undetermined(r)) => {
+            // User ruling 2026-11-28 (backlog b6726716): driver session,
+            // `python -m pytest` on clean tracked repo `scripts/` files.
+            if depth == 0
+                && fam == Family::Python
+                && driver_pytest_trusted(commands, idx, args, judge.scope)
+            {
+                return Decision::Allow;
+            }
+            undetermined(format_args!("`{base}`: {r}"))
+        }
         (Family::Shell, ProgramSource::InlineLiteral(prog)) => {
             layer(&prog, depth + 1, judge, inherited_stdin(cmd, inherited))
         }
@@ -1791,7 +1803,7 @@ fn driver_trusted(
         Ok(m) if m.file_type().is_file() => {}
         Ok(_) | Err(_) => return false,
     }
-    if !scope.driver_trusts_program(&real) {
+    if !scope.driver_trusts_program(&real) && !driver_repo_script(scope, hook_cwd, &real) {
         return false;
     }
     let target = Target {
@@ -1885,24 +1897,7 @@ pub(crate) fn git_tracked_clean(
         Ok(m) if m.file_type().is_file() => {}
         Ok(_) | Err(_) => return false,
     }
-    let probe = |dir: &str, args: &[&str]| -> Determination<String> {
-        let mut cmd = std::process::Command::new("git");
-        harness_core::git_env::scrub(&mut cmd).arg("-C").arg(dir);
-        cmd.args([
-            "--no-optional-locks",
-            "--literal-pathspecs",
-            "-c",
-            "core.fsmonitor=false",
-        ]);
-        cmd.args(args);
-        match harness_core::boundary::run_with_timeout(
-            &mut cmd,
-            std::time::Duration::from_millis(3000),
-        ) {
-            Determination::Known(out) => out.stdout_allowing(&[0]),
-            Determination::Undetermined(why) => Determination::Undetermined(why),
-        }
-    };
+    let probe = git_probe;
     let Determination::Known(top) = probe(hook_cwd, &["rev-parse", "--show-toplevel"]) else {
         return false;
     };

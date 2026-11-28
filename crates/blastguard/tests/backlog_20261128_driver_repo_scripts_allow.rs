@@ -258,7 +258,6 @@ fn expect_not_allow(fx: &Fx, cwd: &Path, cmd: &str) {
 
 /// The observed pytest Deny, in the session's own worktree.
 #[test]
-#[ignore = "RED(b6726716): pending"]
 fn red_driver_own_worktree_python_m_pytest_tracked_scripts_test_is_allow() {
     let fx = fixture("pytest-wt", true);
     let wt = fx.wt();
@@ -274,7 +273,6 @@ fn red_driver_own_worktree_python_m_pytest_tracked_scripts_test_is_allow() {
 /// `cd`s to the MAIN working tree and runs a tracked clean script there in a
 /// subshell with redirects.
 #[test]
-#[ignore = "RED(b6726716): pending"]
 fn red_driver_cd_main_tree_subshell_script_is_allow() {
     let fx = fixture("rollout-shape", true);
     let wt = fx.wt();
@@ -290,7 +288,6 @@ fn red_driver_cd_main_tree_subshell_script_is_allow() {
 /// The four shapes the ruling names, run against the MAIN working tree's
 /// `scripts/` from a session whose cwd is its own worktree.
 #[test]
-#[ignore = "RED(b6726716): pending"]
 fn red_driver_main_tree_scripts_four_shapes_are_allow() {
     let fx = fixture("main-four", true);
     let wt = fx.wt();

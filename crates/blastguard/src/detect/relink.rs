@@ -491,6 +491,34 @@ fn relinked(
         if found.undetermined {
             unmodelled.push(command.trim().to_string());
         }
+        // The substitutions of text the shell expands but compound_views set
+        // aside as `data` (a `for`/`select` word list, a `case` subject): they
+        // execute (`for i in $( busybox ln -s /etc d ); …`), so their commands
+        // are read like those of the command itself. Read as the operands of
+        // an `echo`; a list that cannot be listed is an Ask (backlog 3de4729f).
+        let data = views.get(k).map_or("", |v| v.data.as_str());
+        if data.contains("$(") || data.contains('`') || data.contains("<(") || data.contains(">(") {
+            let probe = format!("echo {data}");
+            let in_data = nested::collect(&probe, &cwd, false);
+            for c in &in_data.commands {
+                match parse(&c.text, c.cwd.clone(), line_is_data) {
+                    Parsed::Inert => {}
+                    Parsed::Op(op) => ops.push(op),
+                    Parsed::Unmodelled if inert(&c.reduced, &c.cwd) => {}
+                    Parsed::Unmodelled => unmodelled.push(c.text.clone()),
+                }
+            }
+            if in_data.undetermined {
+                unmodelled.push(data.trim().to_string());
+            }
+            if in_data.sources_unknown {
+                return Err(format!(
+                    "`{}` sources a file or stdin an earlier command of the line may have \
+                     replaced, so any path may be relinked",
+                    data.trim()
+                ));
+            }
+        }
         if found.sources_unknown {
             return Err(format!(
                 "`{}` sources a file or stdin an earlier command of the line may have \

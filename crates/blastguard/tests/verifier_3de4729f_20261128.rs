@@ -217,7 +217,6 @@ const FOR_LIST: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: pre-existing at base cf33a5b2c (not caused by 3de4729f) — relinker inside a for-list $( ) is not seen; `> d/hosts` is Allow"]
 fn for_list_substitution_relinker_stays_not_allow() {
     let fx = fixture("for-list");
     let bad = not_in(&fx, &in_scratch(&fx, FOR_LIST), &["ask", "deny"]);

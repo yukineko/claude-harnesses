@@ -774,3 +774,36 @@ exit 101: d in 0.58s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s
      Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-1d0f6662a14f81b8)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "e5518fa6"
+title = "blastguard FP: quoted heredoc .rs append body with a bang-backtick string line read as a redirect when later commands follow (rustfmt && cargo test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28 subagent Deny (reason quoted in the test file). RED on main b19e77851: main deny / subagent deny; same body with no tail = allow. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f2_*). Ruling: heredoc body judged by target language; .rs body is data unless run."
+created_at = 1795843300
+updated_at = 1795843300
+weight = 0.0
+issue_number = 2024
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2024"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f2_rs_heredoc_append_bang_backtick_then_rustfmt_cargo_test_same_as_plain -- --ignored"
+rev = "97bc40be49772fbdd169ea624011b2d87a95226c"
+observed_at = 1795843300
+detail = """
+exit 101:  in 0.63s
+
+   Compiling blastguard v0.2.1012 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-336490f42eff98a9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""

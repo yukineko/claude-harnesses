@@ -212,7 +212,7 @@ cargo test -p blastguard --test write_targets_probe 2>&1 | tail -5";
 
 // test-weakening-justified: ignore-added on a new RED for an unfixed FP (observed main deny / subagent deny 2026-11-28); backlog add for it was blocked by blastguard (relay bgr-4f96d9843b69), id to be written back
 #[test]
-#[ignore = "RED: 2026-11-28 blastguard FP — quoted .rs heredoc body string line read as redirect '> !`' when later commands follow; observed Deny (main+subagent)"]
+#[ignore = "RED(e5518fa6): 2026-11-28 blastguard FP — quoted .rs heredoc body string line read as redirect '> !`' when later commands follow; observed Deny (main+subagent)"]
 fn f2_rs_heredoc_append_bang_backtick_then_rustfmt_cargo_test_same_as_plain() {
     assert_same_as_baseline(
         "f2",

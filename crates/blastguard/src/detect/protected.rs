@@ -585,6 +585,34 @@ fn cwd_joined(ctx: &Ctx<'_>, path: &str) -> Option<String> {
     Some(format!("{}/{path}", base.trim_end_matches('/')))
 }
 
+/// The operand with ONE pair of plain shell quotes removed (`"settings.json"`,
+/// `'settings.json'`), or `None` when it is not wholly one quoted word or the
+/// inside still needs shell interpretation (`$`, backtick, backslash, a quote).
+/// A raw operand token keeps its quotes, so `"settings.json"` matches no
+/// protected glob while the shell passes `settings.json` to the command
+/// (backlog f63b97b3). Words that need real expansion are left to the callers'
+/// own unresolvable-operand handling.
+pub(super) fn strip_plain_quotes(word: &str) -> Option<&str> {
+    let inner = word
+        .strip_prefix('"')
+        .and_then(|w| w.strip_suffix('"'))
+        .or_else(|| word.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')))?;
+    if inner.contains(['"', '\'', '$', '`', '\\']) {
+        return None;
+    }
+    Some(inner)
+}
+
+/// Whether `hit` holds for the operand as spelled, as joined onto the cwd, or
+/// for either of those with plain quotes removed ([`strip_plain_quotes`]).
+fn hit_any_spelling(ctx: &Ctx<'_>, path: &str, hit: impl Fn(&str) -> bool) -> bool {
+    let spellings = [Some(path), strip_plain_quotes(path)];
+    spellings
+        .into_iter()
+        .flatten()
+        .any(|p| hit(p) || cwd_joined(ctx, p).is_some_and(|abs| hit(&abs)))
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -601,7 +629,7 @@ fn cwd_joined(ctx: &Ctx<'_>, path: &str) -> Option<String> {
 /// are different recurring failures and want different signatures.
 pub(super) fn protected_disarm_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
     let hit = |p: &str| exclude::is_protected_path(p) && !ctx.in_worktree_checkout(p);
-    if hit(path) || cwd_joined(ctx, path).is_some_and(|abs| hit(&abs)) {
+    if hit_any_spelling(ctx, path, hit) {
         Some(Decision::deny(format!(
             "{action} disarms a protected gate/config path ({path}) without writing to it — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -625,7 +653,7 @@ pub(super) fn protected_tree_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Op
         (exclude::is_protected_path(p) || exclude::holds_protected_paths(p))
             && !ctx.in_worktree_checkout(p)
     };
-    if hit(path) || cwd_joined(ctx, path).is_some_and(|abs| hit(&abs)) {
+    if hit_any_spelling(ctx, path, hit) {
         Some(Decision::deny(format!(
             "{action} destroys a directory tree holding protected gate/config paths ({path}) — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -670,7 +698,13 @@ blastguard cannot tell that this is intended and refuses to guess"
                 Determination::Undetermined(_) => {}
             }
         }
-        Determination::Known(super::Placement::Outside { .. }) => return None,
+        Determination::Known(super::Placement::Outside { path }) => {
+            // An ANCESTOR of the storage root takes every linked worktree with it.
+            if ctx.scope.holds_worktree_root(&path) {
+                return refuse("a directory holding the worktree storage root (and every linked worktree in it)");
+            }
+            return None;
+        }
         Determination::Undetermined(_) => {}
     }
     if subject.contains("worktrees") {

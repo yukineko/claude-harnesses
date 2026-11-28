@@ -7,6 +7,7 @@ use super::{
 // Backlog 606a93ab: the other-worktree discard verdict (user ruling
 // 2026-11-20), split out to keep this file under the file-growth limit.
 mod apply;
+mod long_opt;
 mod other_worktree;
 use other_worktree::{
     linked_checkout_is_clean, managed_discard, other_worktree_discard, ManagedWt,
@@ -1474,7 +1475,8 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
         // targets are untouched (`git rm src/old.rs` stays Allow) — only the
         // TARGET is classified, never the blast radius.
         "rm" => {
-            for op in positional_operands(&rest[idx + 1..], &[]) {
+            let args = &rest[idx + 1..];
+            for op in positional_operands(args, &[]) {
                 if let Some(deny) = protected_disarm_deny(ctx, "git rm", op) {
                     return deny;
                 }
@@ -1483,6 +1485,33 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
                 }
                 if let Some(deny) = protected_glob_deny("git rm operand", op) {
                     return deny;
+                }
+            }
+            let recursive = args.iter().take_while(|t| **t != "--").any(|t| {
+                *t == "--recursive"
+                    || (t.starts_with('-') && !t.starts_with("--") && t.contains('r'))
+            });
+            if recursive {
+                let base = match git_moved_dir(ctx.scope, &rest[..idx], ctx.base_for("git")) {
+                    Determination::Known(Some(d)) => Some(d),
+                    Determination::Known(None) => ctx.base_for("git").map(str::to_string),
+                    Determination::Undetermined(u) => {
+                        return Decision::ask(format!(
+                            "git rm -r runs in a directory that could not be placed ({}) — \
+blastguard cannot tell which tracked files it deletes and refuses to guess",
+                            u.reason().as_str()
+                        ));
+                    }
+                };
+                for op in positional_operands(args, &[]) {
+                    if let Some(why) =
+                        crate::deletion::git_rm_main_tree_refusal(ctx.scope, op, base.as_deref())
+                    {
+                        return Decision::ask(format!(
+                            "git rm -r {op}: {why} — a recursive delete of tracked files is not \
+an Allow here, and blastguard refuses to guess"
+                        ));
+                    }
                 }
             }
             Decision::Allow

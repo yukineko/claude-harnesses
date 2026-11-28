@@ -282,7 +282,6 @@ fn git_apply_harmless_spellings_keep_pre_fix_allow() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: --stat/--check/--numstat followed by --apply re-enables the write (real git rewrote settings.json) but the verdict is allow"]
 fn red_git_apply_readonly_flag_then_apply_is_not_allow() {
     let fx = Fx::new();
     let p = fx.patch();
@@ -299,7 +298,6 @@ fn red_git_apply_readonly_flag_then_apply_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: git accepts the abbreviated --dir= for --directory (real git rewrote settings.json) but the verdict is allow"]
 fn red_git_apply_abbreviated_directory_option_is_not_allow() {
     let fx = Fx::new();
     let p = fx.patch();
@@ -308,7 +306,6 @@ fn red_git_apply_abbreviated_directory_option_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: git apply run IN ~/.claude (cwd or -C, no --directory) writes settings.json there (real git observed) but the verdict is allow"]
 fn red_git_apply_in_protected_dir_is_not_allow() {
     let fx = Fx::new();
     let p = fx.patch();
@@ -353,7 +350,6 @@ fn mv_ordinary_files_keep_pre_fix_allow() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: moving the directory that CONTAINS the worktree storage root takes every linked worktree with it, but the verdict is allow"]
 fn red_mv_of_worktree_store_container_is_not_allow() {
     let fx = Fx::new();
     let cases = [(
@@ -403,7 +399,6 @@ fn relative_rm_of_ordinary_files_keeps_pre_fix_verdict() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: a quoted relative operand `\"settings.json\"` / `'settings.json'` (cwd ~/.claude) is allow while the unquoted one is deny"]
 fn red_quoted_relative_rm_of_settings_is_not_allow() {
     let fx = Fx::new();
     let cases = [
@@ -464,7 +459,6 @@ fn unreadable_worktree_registry_is_ask() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: a primary checkout made with --separate-git-dir has a `.git` FILE, is read as a linked worktree (shared_main_tree Known(false)), and `rm -rf src` there is allow although it has a linked worktree"]
 fn red_separate_git_dir_main_tree_rm_is_not_allow() {
     let fx = Fx::new();
     let cases = [(fx.sep(), "rm -rf src".to_string())];
@@ -472,7 +466,6 @@ fn red_separate_git_dir_main_tree_rm_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED(f63b97b3): observed 2026-11-28: `git rm -r src` in the shared main tree deletes the same tracked files `rm -rf src` (now Ask) does, but is allow"]
 fn red_git_rm_recursive_in_main_tree_is_not_allow() {
     let fx = Fx::new();
     let cases = [

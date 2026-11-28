@@ -597,11 +597,13 @@ pub(crate) fn probe_tree_with_timeout(
 
 /// Whether the work-tree root `top` is the SHARED main tree of a repository
 /// worked on through linked worktrees (backlog ea96e65d): a primary checkout
-/// (its `.git` is a DIRECTORY; a linked worktree has a `gitdir:` FILE) with at
-/// least one registered linked worktree (`.git/worktrees/<name>`). A lone
-/// checkout with no linked worktree is `Known(false)`. A stat / read failure
-/// other than "no `.git/worktrees` directory", and any unexpected `.git` type,
-/// is `Undetermined` — never `Known(false)`.
+/// (its `.git` is a DIRECTORY, or a `gitdir:` FILE pointing at a
+/// `--separate-git-dir` repository that has no `commondir`; a linked worktree
+/// has a `gitdir:` file whose target holds `commondir`) with at least one
+/// registered linked worktree (`<gitdir>/worktrees/<name>`). A lone checkout
+/// with no linked worktree is `Known(false)`. A stat / read failure other than
+/// "no `worktrees` directory", an unparsable `.git` file and any unexpected
+/// `.git` type is `Undetermined` — never `Known(false)`.
 fn shared_main_tree(top: &str) -> Determination<bool> {
     let git = Path::new(top).join(".git");
     let meta = match std::fs::symlink_metadata(&git) {
@@ -610,13 +612,59 @@ fn shared_main_tree(top: &str) -> Determination<bool> {
             return Determination::undetermined(format!("could not stat `.git` of {top}: {e}"))
         }
     };
-    if meta.is_file() {
-        return Determination::known(false);
-    }
-    if !meta.is_dir() {
+    let registry_parent = if meta.is_file() {
+        // A `.git` FILE is either a linked worktree (its gitdir is
+        // `<common>/worktrees/<n>` and holds a `commondir` file) or the
+        // primary checkout of a `--separate-git-dir` repository (its gitdir IS
+        // the repository: no `commondir`, not below a `worktrees/` directory).
+        // Anything else is not told apart, so it is Undetermined (f63b97b3).
+        let text = match harness_core::boundary::read_to_string(&git) {
+            Determination::Known(Some(t)) => t,
+            Determination::Known(None) => {
+                return Determination::undetermined(format!("`.git` file of {top} vanished"))
+            }
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        };
+        let Some(raw) = text
+            .lines()
+            .find_map(|l| l.strip_prefix("gitdir:"))
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+        else {
+            return Determination::undetermined("`.git` file has no `gitdir:` line");
+        };
+        let gitdir = if raw.starts_with('/') {
+            PathBuf::from(raw)
+        } else {
+            Path::new(top).join(raw)
+        };
+        match std::fs::symlink_metadata(gitdir.join("commondir")) {
+            Ok(_) => return Determination::known(false), // linked worktree
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "could not stat commondir of {}: {e}",
+                    gitdir.display()
+                ))
+            }
+        }
+        if gitdir
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "worktrees")
+        {
+            return Determination::undetermined(format!(
+                "{} looks like a worktree gitdir but has no commondir",
+                gitdir.display()
+            ));
+        }
+        gitdir
+    } else if meta.is_dir() {
+        git
+    } else {
         return Determination::undetermined("`.git` is neither a directory nor a file");
-    }
-    match harness_core::boundary::read_dir_entries_checked(&git.join("worktrees")) {
+    };
+    match harness_core::boundary::read_dir_entries_checked(&registry_parent.join("worktrees")) {
         Determination::Known(None) => Determination::known(false),
         Determination::Known(Some(entries)) => Determination::known(!entries.is_empty()),
         Determination::Undetermined(u) => Determination::Undetermined(u),

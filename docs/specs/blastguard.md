@@ -1988,4 +1988,11 @@ driver セッションでは `ask` を出さない機構を blastguard 自身に
   `NotAllowed`（従来の confined Ask / Deny へ落ちる）。`.git/worktrees` の読み取り失敗・`.git` の型が想定外は `None`＝`NotAllowed`。
   linked worktree を持たない単独 checkout の挙動（`tests/rm_by_target.rs` の class 5 Allow）は変えない。
   class 4（ignored build output）は tracked==0 なので対象外。
+- 残り 7 shape の是正（backlog f63b97b3、RED=`tests/backlog_20261128_relative_protected_verifier.rs`）: ①`git apply` の long option は
+  git と同じ一意接頭辞解決（`detect/git/long_opt.rs::resolve_long_abbrev`。`--dir=` は `--directory=`、曖昧な接頭辞は `Ambiguous`＝Ask）、
+  read-only 早期 Allow は `--apply`/`--reject` が後ろにあれば無効、cwd/`-C` 自身も landing として判定。②引用付き operand
+  （`"settings.json"`）は引用除去後の語でも保護判定（`strip_plain_quotes`）。③worktree storage root の祖先の `mv` は Ask
+  （`SafeRoots::holds_worktree_root`）。④`.git` がファイル（`--separate-git-dir` の primary）のとき gitdir の `commondir` 有無で
+  linked/primary を判別（読めない・判別不能は `Undetermined`）。⑤`git rm -r` は `rm -rf` と同じ shared main tree 判定
+  （`deletion.rs::git_rm_main_tree_refusal`、判定不能は Ask）。
 - RED: `crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs`。

@@ -1025,6 +1025,11 @@ doc = "docs/specs/blastguard.md"
 reason = "module 責務 bullet detect/redirect/words: single definition of a redirect word (operator / owns-next-word), zsh clobber >! second target candidate, redirect words stripped before git add / rm judgment (backlog ffa05737 D1/D2, 0e79c339 D3)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/git/long_opt.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象…' bullet 残り 7 shape ①: git unique-prefix long option resolution, Ambiguous resolved restrictively (backlog f63b97b3)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/git/apply.rs"
 doc = "docs/specs/blastguard.md"
 reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' bullet `git apply`: --directory value placed against cwd and judged as a write target, --unsafe-paths Ask, unplaceable value Ask (backlog ea96e65d)."

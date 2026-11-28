@@ -27,7 +27,6 @@ fn scoped(cmd: &str) -> Decision {
 }
 
 #[test]
-#[ignore = "RED(21d05411): DEBUG trap that cd's to a system dir lets a later relative write land there"]
 fn debug_trap_cd_then_relative_write_is_never_allow() {
     let mut bad = Vec::new();
     for c in [

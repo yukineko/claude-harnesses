@@ -678,3 +678,32 @@ exit 101: f4/crates/blastguard)
     Finished `release` profile [optimized] target(s) in 31.98s
      Running tests/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling.rs (target/release/deps/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling-95006f08cfa2b02c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
+
+[[task]]
+id = "96faed52"
+title = "blastguard detector: git --output to protected config is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed on main f60cd1d6e (RED at ee9eca672): Allow for git diff/log/show --output=<HOME>/.claude/settings.json, git diff --output <path> (separate arg), git diff --output=<HOME>/.claude/hooks/pre.sh, git worktree add <HOME>/.claude/hooks/w, touch dlink / touch <abs>/dlink where dlink is a dangling symlink -> <HOME>/.claude/hooks/new.sh. Real git confirmed --output forms overwrite the target. Not reproduced: cp payload dlink via the same dangling link (already not Allow). Controls green: cp payload <HOME>/.claude/settings.json not Allow; git diff --output=out.patch Allow. Test: crates/blastguard/tests/backlog_20261128_detector_git_output_protected_config.rs (branch red-git-output)."
+created_at = 1795835829
+updated_at = 1795835829
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
+rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
+observed_at = 1795835829
+detail = """
+exit 101: rness-worktrees/red-git-output/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
+     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-4c0613a04b74e827)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_git_output_protected_config`"""

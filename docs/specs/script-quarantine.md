@@ -645,4 +645,19 @@ fail-closed のケース（§3 の判定不能すべて）には **(fc)** を付
 S3 完了 → M1（共有 crate `effectscope` への純粋移動）→ S4（P0-a を含む。Ask の増加は replay で測る）→ 検疫 plugin の sh/bash 版（parked で配布）→ canary で有効化（同時に P0-b = `.`/`source` の Ask 化）→ S5（Python）→ 検疫 plugin の Python 対応。
 
 Q1〜Q20 と Q4-path は 2026-11-17 に裁定済み（Q4-path、Q7、Q9、Q12〈改訂〉、Q14、Q15 は第 2 次裁定）。裁定の反映で生じた §9.1 の D-1〜D-3 も 2026-11-17 に裁定済み（第 3 次裁定）。第 3 次裁定の反映で足さなかった E-1〜E-4 も 2026-11-17 に裁定済み（第 4 次裁定）。E-1 / E-4 の反映で出た食い違い 3 点（F-1〜F-3）も 2026-11-17 に裁定済み（第 5 次裁定）。
-§9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）は 2026-11-18 に測った（M-3）。未裁定は §9.1 に残した Q12 の上げ忘れ検出ゲートの置き場所と判定方法（実装の段階で改めてユーザーに聞く）である。F-1・F-2 の反映で決まらなかった 2 点（G-1、G-2）は harness-5a が判断した（§9.1）。
+§9.2 の実測 3 件（Q21、Q22、Bash ツールが使う shell）は 2026-11-18 に測った（M-3）。
+## 12. /flow driver セッションでの repo の scripts/（2026-11-28 ユーザー裁定、backlog b6726716）
+
+裁定（逐語）: 「driverで repo スクリプトを許可 (推奨)」。/flow の driver セッションは Ask を出せず Deny に置き換えるので、B.5 の Undetermined のままでは rollout も検証テストも走らない。そこで `crates/blastguard/src/detect/ast/b5/driver_repo.rs` が、driver セッションに限り次を Allow にする（plugin cache の bin を信頼する `driver_trusted` と同じ入口）。
+
+- **対象のファイル**: hook の cwd と git の common dir が同じ repo（自分の worktree と main の作業ツリーの両方）にあって、`scripts/` の下にあり、追跡されていて未 commit の変更が無いもの。直接実行・`bash <f>`・`python3 <f>` の形。
+- **`python3 -m pytest <f>`**: 次をすべて満たすときだけ Allow にする。
+  - `<f>` が上の条件を満たす `.py` である。
+  - `scripts/` の下全体に未 commit の変更と未追跡のファイルが無い。
+  - ignored の pytest 設定（`conftest.py`・`pytest.ini`・`tox.ini`・`setup.cfg`・`pyproject.toml`・`.pth`）も無い。
+  - フラグが無害なものだけである。
+  - 同じ行のほかのコマンドが読み取り専用で、パスへのリダイレクトが無い。
+  - `PYTEST_*` などの環境変数を注入していない。
+- **判定不能のとき**: どの条件も、判定できなければ Deny にする（fail-closed）。未追跡、変更あり、repo の外、`scripts/` の外は従来どおり。
+- **ファイルの中身**: 読まない。tracked で unmodified なファイルの扱いは既存の T1 のまま変えない。中身の判定は §1 の検疫 plugin の役割である。
+- **driver でないセッション**: 従来どおり Ask。未裁定は §9.1 に残した Q12 の上げ忘れ検出ゲートの置き場所と判定方法（実装の段階で改めてユーザーに聞く）である。F-1・F-2 の反映で決まらなかった 2 点（G-1、G-2）は harness-5a が判断した（§9.1）。

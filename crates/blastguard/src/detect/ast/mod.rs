@@ -82,6 +82,8 @@ mod judge;
 mod parse;
 mod shape;
 pub(crate) use shape::{shape_facts, static_words};
+mod static_simple;
+pub(crate) use static_simple::is_single_static_command;
 pub(super) mod rustup;
 pub(super) mod s5;
 mod support;

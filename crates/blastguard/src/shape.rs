@@ -183,11 +183,27 @@ pub fn class_of_path(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     if matches!(physical, TargetClass::System | TargetClass::ProtectedConfig) {
         return physical;
     }
-    if physical == lexical {
+    // An Allow-eligible class needs a spelling that IS the real path: no `..`
+    // (the kernel resolves it physically, the spelling lexically), no symlink
+    // on the way, and the same case the file system holds (macOS folds case).
+    if physical == lexical && spelling_is_real(raw, &abs, &real) {
         lexical
     } else {
         TargetClass::Undetermined
     }
+}
+
+/// Whether the spelling `raw` of the absolute path `abs` (real path `real`)
+/// names that very path: no `..` component, and the canonical path of the
+/// longest existing prefix equals the spelling byte for byte (so no symlink on
+/// the way and no case difference).
+fn spelling_is_real(raw: &str, abs: &str, real: &str) -> bool {
+    // Compared component by component and byte for byte (`.` and repeated
+    // slashes are no difference; a case or symlink difference is).
+    !raw.split('/').any(|c| c == "..")
+        && std::path::Path::new(real)
+            .components()
+            .eq(std::path::Path::new(abs).components())
 }
 
 /// `p` with every symlink resolved ([`realpath`]), or `None` when no prefix of
@@ -380,17 +396,28 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
             return c;
         }
     }
+    let real_spelling = spelling_is_real(raw, &abs, &real);
     if lexical == TargetClass::Scratchpad && physical == TargetClass::Scratchpad {
-        return TargetClass::Scratchpad;
+        return if real_spelling {
+            TargetClass::Scratchpad
+        } else {
+            TargetClass::Undetermined
+        };
     }
-    if real.contains("/.condukt/worktrees/") || real.contains("/.harness-worktrees/") {
-        return TargetClass::Worktree;
+    let placed = if real.contains("/.condukt/worktrees/") || real.contains("/.harness-worktrees/") {
+        TargetClass::Worktree
+    } else {
+        match repo_kind(&real) {
+            RepoKind::Linked => TargetClass::Worktree,
+            RepoKind::Main => TargetClass::MainTree,
+            RepoKind::Unknown => TargetClass::Undetermined,
+        }
+    };
+    // Only the Allow-eligible class needs the spelling to be the real path.
+    if placed == TargetClass::Worktree && !real_spelling {
+        return TargetClass::Undetermined;
     }
-    match repo_kind(&real) {
-        RepoKind::Linked => TargetClass::Worktree,
-        RepoKind::Main => TargetClass::MainTree,
-        RepoKind::Unknown => TargetClass::Undetermined,
-    }
+    placed
 }
 
 /// `p` with every symlink resolved: the canonical path of its nearest existing
@@ -431,6 +458,12 @@ fn realpath_existing(p: &str) -> Option<String> {
 /// (`Undetermined` when they cannot be determined statically).
 pub fn static_words(command: &str) -> Determination<String> {
     crate::detect::ast::static_words(command)
+}
+
+/// Whether `command` is one simple command of static literal words (the
+/// structural half of Allow-eligibility; see `detect::ast::static_simple`).
+pub fn is_single_static_command(command: &str) -> bool {
+    crate::detect::ast::is_single_static_command(command)
 }
 
 /// The evaluator's facts for the Bash command `command`; an undetermined

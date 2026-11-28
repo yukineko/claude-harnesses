@@ -1097,12 +1097,43 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         // changes here: the directory forms above keep following (the
         // restrictive side).
         Some(dest) => protected_path_block(ctx, &action, dest)
+            // `cp SRC DIR` / `mv SRC DIR` with no trailing slash: when DIR is
+            // (or may be) a directory the file lands at `DIR/<basename SRC>`,
+            // which can be a protected file (the Ask rules override).
+            .or_else(|| {
+                if operands.len() < 2 || !may_be_directory(dest, ctx.raw_base.as_deref()) {
+                    return None;
+                }
+                let base = dest.trim_end_matches('/');
+                operands[..operands.len() - 1].iter().find_map(|src| {
+                    protected_path_block(ctx, &action, &format!("{base}/{}", basename(src)))
+                })
+            })
             .or_else(|| protected_glob_deny(&action, dest))
             .or_else(|| dest_system_block(ctx, cmd, &action, dest, args.no_deref))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
         // error, `mv -t DIR` with no source does nothing).
         None => Decision::Allow,
+    }
+}
+
+/// Whether the destination operand `dest` is, or may be, an existing
+/// directory: it is one, or the file system could not say (any error other
+/// than "does not exist", or a relative path with no known base). Restrictive:
+/// only a definite "absent or not a directory" is `false`.
+fn may_be_directory(dest: &str, base: Option<&str>) -> bool {
+    let path = if dest.starts_with('/') {
+        std::path::PathBuf::from(dest)
+    } else {
+        match base.filter(|b| b.starts_with('/')) {
+            Some(b) => std::path::Path::new(b).join(dest),
+            None => return true,
+        }
+    };
+    match std::fs::metadata(&path) {
+        Ok(m) => m.is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     }
 }
 

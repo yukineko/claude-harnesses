@@ -93,6 +93,26 @@ pub struct Facts {
     /// `None`: no command text. `Undetermined`: the words could not be
     /// determined, which counts as matched for a `command_regex`.
     command_norm: Option<harness_core::verdict::Determination<String>>,
+    /// What the Bash command text shows about its structure (see
+    /// [`Structure`]).
+    structure: Structure,
+}
+
+/// Whether the Bash line is one simple command of static literal words
+/// ([`crate::shape::is_single_static_command`], on the AST).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Structure {
+    /// No command text was attached (a judge-level fact set, or a file tool's
+    /// empty text): the structure is not asserted here. The production entry
+    /// [`crate::learned::apply_with`] never leaves a shell call in this state
+    /// (it marks it [`Structure::Unreadable`]).
+    Unchecked,
+    /// The call is a shell command whose text could not be read.
+    Unreadable,
+    /// One simple command of static literal words.
+    SimpleStatic,
+    /// Anything else (pipeline, `;`, compound, expansion, assignment, ...).
+    Other,
 }
 
 impl Facts {
@@ -108,6 +128,7 @@ impl Facts {
             verbs_joined: shape.verbs.join(","),
             command: None,
             command_norm: None,
+            structure: Structure::Unchecked,
         }
     }
 
@@ -123,7 +144,30 @@ impl Facts {
         } else {
             crate::shape::static_words(command)
         });
+        // Empty text is a file tool's (no shell line at all).
+        self.structure = if command.trim().is_empty() {
+            Structure::Unchecked
+        } else if crate::shape::is_single_static_command(command) {
+            Structure::SimpleStatic
+        } else {
+            Structure::Other
+        };
         self
+    }
+
+    /// Mark a call that has no readable command text. A file tool (every verb
+    /// a file-tool name) has no shell line and stays unchecked; any other call
+    /// is a shell command whose structure is unknown, so it is never
+    /// Allow-eligible.
+    pub fn without_command_text(mut self) -> Facts {
+        if !self.verbs.iter().all(|v| builtin::is_file_tool(&v.tool)) {
+            self.structure = Structure::Unreadable;
+        }
+        self
+    }
+
+    pub(crate) fn structure(&self) -> Structure {
+        self.structure
     }
 
     pub fn class(&self) -> TargetClass {

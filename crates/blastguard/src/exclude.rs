@@ -685,6 +685,30 @@ fn is_ask_rules_override(path: &str) -> bool {
     ask_rules_override_relation(path, false)
 }
 
+/// `p` with the longest existing prefix canonicalised (every symlink in it
+/// resolved, and the file system's own case) and the not-yet-existing
+/// remainder appended as written. `p` itself when no prefix canonicalises or
+/// the result is not UTF-8 (the other spellings still apply).
+fn physical_spelling(p: &str) -> String {
+    let mut rest: Vec<&str> = Vec::new();
+    let mut cur = std::path::Path::new(p);
+    loop {
+        if let Ok(mut out) = std::fs::canonicalize(cur) {
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out.to_str().map_or_else(|| p.to_string(), str::to_string);
+        }
+        match (cur.file_name().and_then(|n| n.to_str()), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                cur = parent;
+            }
+            _ => return p.to_string(),
+        }
+    }
+}
+
 /// True when `path` is a proper ANCESTOR directory of the file
 /// `BLASTGUARD_ASK_RULES` points at: removing or renaming it removes the
 /// override file, and a missing override is undetermined (no Allow), which a
@@ -701,10 +725,17 @@ fn ask_rules_override_relation(path: &str, ancestor: bool) -> bool {
     if target.trim().is_empty() {
         return false;
     }
+    // Every spelling is compared case-folded (the file system may fold case:
+    // macOS default) and in three forms: collapsed, `..`-resolved, and the
+    // PHYSICAL one (the longest existing prefix canonicalised, so a symlinked
+    // directory or `<link>/..` reaches the same file under another name).
+    // Over-matching on a case-sensitive file system only withholds an Allow.
     let spellings = |p: &str| {
         let c = collapse(p);
         let r = resolve_parents(&c);
-        [c, r]
+        let phys = physical_spelling(&c);
+        let phys_r = physical_spelling(&r);
+        [c, r, phys, phys_r].map(|s| s.to_lowercase())
     };
     let want = spellings(&target);
     let have = spellings(path);

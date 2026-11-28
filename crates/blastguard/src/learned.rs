@@ -68,9 +68,11 @@ pub fn apply_with(
         TableRead::Known(t) => (RuleSet::from_learned(t), String::new()),
     };
     let mut facts = Facts::from_shape(shape, system_harm);
-    if let Some(c) = command {
-        facts = facts.with_command(c);
-    }
+    facts = match command {
+        Some(c) => facts.with_command(c),
+        // No readable text: a shell call is then never Allow-eligible.
+        None => facts.without_command_text(),
+    };
     let mut sets: Vec<&RuleSet> = human.to_vec();
     sets.push(&learned);
     match askrules::judge(&facts, &sets) {
@@ -146,9 +148,17 @@ mod tests {
             apply(Decision::ask("q"), &s, true, &table(&s, Verdict::Allow, 0)),
             Applied::Unchanged(Decision::Ask(_))
         ));
+        // Changed with the structural gate: the clean-entry control now
+        // carries the command text (one simple static command), because a
+        // shell call with no readable text is never Allowed.
+        let t = table(&s, Verdict::Allow, 0);
         assert!(matches!(
-            apply(Decision::ask("q"), &s, false, &table(&s, Verdict::Allow, 0)),
+            apply_with(Decision::ask("q"), &s, false, Some("rm build"), &t, &[]),
             Applied::Allow(_)
+        ));
+        assert!(matches!(
+            apply(Decision::ask("q"), &s, false, &t),
+            Applied::Unchanged(Decision::Ask(_))
         ));
     }
 

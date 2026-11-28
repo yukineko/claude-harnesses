@@ -854,6 +854,8 @@ notes = "Observed 2026-11-28 subagent Deny (reason quoted in the test file). RED
 created_at = 1795843300
 updated_at = 1795843300
 weight = 0.0
+issue_number = 2024
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2024"
 rev = 0
 
 [task.repro]

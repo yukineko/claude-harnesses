@@ -540,6 +540,8 @@ fn fp_compare_against_baseline_binary() {
         format!("echo x >! {s}"),
         format!("git add -A >! {s}"),
         "git add -A 2>&1 | tee log".to_string(),
+        format!("echo x >>& {s}"),
+        format!("echo x >>| {s}"),
     ];
     let mut stricter = vec![];
     for (cwd, c) in &cases {

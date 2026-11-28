@@ -436,13 +436,59 @@ fn r15_home_empty_unset_or_relative_never_places_condukt_container() {
 /// `git worktree repair`. Precondition (real git, twin fixture): git then
 /// calls `f` a linked worktree rooted there, and `git add -A` + `git commit -a
 /// -m x` from `f` make a commit on y's branch that holds f's `secret` and
-/// drops y's tracked `src/lib.rs`. Expected: no learned Allow from `f`.
-/// The forging steps are measured (no table) and printed; observed at
+/// drops y's tracked `src/lib.rs`. Formerly expected: no learned Allow from
+/// `f` (superseded, see below). The forging steps were measured; observed at
 /// 97d4b7709: Write tool `f/.git` => deny, `printf .. > f/.git` => ask, but
 /// `cp ../y/.git .git` (cwd f) => allow and `git worktree repair` => allow, so
 /// the whole chain needs no human once the commit key is learned.
+///
+/// re-anchored 2026-11-28 (user ruling 「コンテナ内なら可」)
+/// Split in two. (a) here: once forged, `f` IS a real linked worktree
+/// directly in the container, which the ruling makes Worktree (any session's),
+/// so the learned keys DO apply there (assert inverted: Allow). (b)
+/// `r15_dotgit_forging_steps_are_not_allow` keeps the forging STEPS as an
+/// ignored RED (detector side, filed separately).
 #[test]
 fn r15_dotgit_forged_inside_harness_container() {
+    let e = env_prod("cf");
+    let k_add = learn(&e, &bash(&e.wt, "git add -A"));
+    let k_ca = learn(&e, &bash(&e.wt, "git commit -a -m x"));
+    let f = e.home.join("src").join(".harness-worktrees").join("f");
+    std::fs::create_dir_all(&f).unwrap();
+    std::fs::write(f.join("secret"), "s").unwrap();
+    let admin_y = e.main.join(".git").join("worktrees").join("y");
+    forge(&f, &admin_y);
+    assert_eq!(
+        layout(&f),
+        Some((canon(&f), canon(&admin_y), canon(&e.main.join(".git")))),
+        "precondition: git calls f a linked worktree rooted at f with y's admin dir"
+    );
+    let mut bad = vec![];
+    for (k, c) in [(&k_add, "git add -A"), (&k_ca, "git commit -a -m x")] {
+        let p = bash(&f, c);
+        let d = decide_with(&e, &table_recorded(&e, k), &p);
+        println!("MEASURE forged f `{c}` => {d}; shape {}", shape(&e, &p));
+        if d != "allow" {
+            bad.push(format!(
+                "`{c}` in the forged container worktree {} with key {k} => {d} (ruling: Allow)",
+                f.display()
+            ));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// (b) of the split above: the forging steps themselves. Turning a plain
+/// directory in the container into another session's linked root is not an
+/// ordinary edit (precondition, real git on a twin fixture: the commit then
+/// lands on y's branch, holds f's `secret`, drops y's `src/lib.rs`), so none
+/// of the steps -- the Write tool creating `f/.git`, `cp ../y/.git .git`
+/// (cwd f), `cp <y>/.git <f>/.git`, `git worktree repair` (cwd f) -- may be
+/// Allow without a table. Measured at 97d4b7709: Write => deny, `cp ../y/.git
+/// .git` => allow, `git worktree repair` => allow.
+#[test]
+#[ignore = "RED: detector — forging a linked-worktree .git is Allow; filed separately"]
+fn r15_dotgit_forging_steps_are_not_allow() {
     let h = env_prod("cfharm");
     let f = h.home.join("src").join(".harness-worktrees").join("f");
     std::fs::create_dir_all(&f).unwrap();
@@ -466,24 +512,23 @@ fn r15_dotgit_forged_inside_harness_container() {
          {files:?} / y tip {branch_y:?}"
     );
 
-    let e = env_prod("cf");
-    let k_add = learn(&e, &bash(&e.wt, "git add -A"));
-    let k_ca = learn(&e, &bash(&e.wt, "git commit -a -m x"));
+    let e = env_prod("cfsteps");
     let f = e.home.join("src").join(".harness-worktrees").join("f");
     std::fs::create_dir_all(&f).unwrap();
     std::fs::write(f.join("secret"), "s").unwrap();
     let admin_y = e.main.join(".git").join("worktrees").join("y");
-    // The forging steps as the agent would issue them (measured, no table).
+    let mut bad = vec![];
+    // The forging steps as the agent would issue them (no table).
     let write_git = json!({
         "hook_event_name": "PreToolUse", "session_id": SID, "cwd": e.wt,
         "tool_name": "Write",
         "tool_input": {"file_path": f.join(".git"), "content": format!("gitdir: {}\n", admin_y.display())},
     });
-    println!(
-        "MEASURE forging step Write {}/.git => {}",
-        f.display(),
-        decide_with(&e, &no_table(&e), &write_git)
-    );
+    let d = decide_with(&e, &no_table(&e), &write_git);
+    println!("MEASURE forging step Write {}/.git => {d}", f.display());
+    if d == "allow" {
+        bad.push(format!("Write {}/.git => allow", f.display()));
+    }
     for c in [
         format!(
             "printf 'gitdir: {}\\n' > {}/.git",
@@ -492,27 +537,17 @@ fn r15_dotgit_forged_inside_harness_container() {
         ),
         format!("cp {}/.git {}/.git", e.wt2.display(), f.display()),
         "cp ../y/.git .git".to_string(),
+        "git worktree repair".to_string(),
     ] {
-        println!(
-            "MEASURE forging step Bash `{c}` (cwd f) => {}",
-            decide_with(&e, &no_table(&e), &bash(&f, &c))
-        );
-    }
-    println!(
-        "MEASURE forging step `git worktree repair` (cwd f) => {}",
-        decide_with(&e, &no_table(&e), &bash(&f, "git worktree repair"))
-    );
-    forge(&f, &admin_y);
-    let mut bad = vec![];
-    for (k, c) in [(&k_add, "git add -A"), (&k_ca, "git commit -a -m x")] {
-        if let Some(x) = rides(&e, k, &bash(&f, c)) {
-            bad.push(x);
+        let d = decide_with(&e, &no_table(&e), &bash(&f, &c));
+        println!("MEASURE forging step Bash `{c}` (cwd f) => {d}");
+        if d == "allow" {
+            bad.push(format!("`{c}` (cwd {}) => allow", f.display()));
         }
     }
     assert!(
         bad.is_empty(),
-        "a directory forged into another session's linked root inside the container is the \
-         own worktree:\n{}",
+        "forging a linked-worktree .git in the container is Allow:\n{}",
         bad.join("\n")
     );
 }
@@ -523,7 +558,9 @@ fn r15_dotgit_forged_inside_harness_container() {
 /// across calls, so a cwd of another session's worktree `y` (same container)
 /// makes `y` own. Precondition (real git, twin fixture): `git commit -a -m x`
 /// from `y` commits y's uncommitted edit on y's branch; `git add -A` stages
-/// y's untracked file. Expected per the spec sentence: no learned Allow.
+/// y's untracked file. Expected (re-anchored 2026-11-28, user ruling
+/// 「コンテナ内なら可」, which superseded the spec sentence above): learned
+/// Allow in `y`; none in the main tree, outside the containers or in HOME.
 #[test]
 fn r15_cwd_in_another_sessions_worktree_in_same_container() {
     let h = env_prod("othharm");
@@ -540,7 +577,23 @@ fn r15_cwd_in_another_sessions_worktree_in_same_container() {
         "precondition: the commit holds y's uncommitted edit"
     );
 
+    // re-anchored 2026-11-28 (user ruling 「コンテナ内なら可」)
+    // Before: another session's worktree `y` in the same container must not
+    // ride the own key. After: any real linked worktree directly in a fixed
+    // container is Worktree, so `y` with the learned key IS Allow (asserted as
+    // the FP side). Kept: the main tree, a linked worktree OUTSIDE every
+    // container (`<home>/elsewhere/z`) and a plain HOME directory never ride.
     let e = env_prod("oth");
+    let outside = e.home.join("elsewhere").join("z");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    git(
+        &e.main,
+        &["worktree", "add", "-q", outside.to_str().unwrap()],
+    );
+    std::fs::write(outside.join("new2.rs"), "n").unwrap();
+    let hdir = e.home.join("docs");
+    std::fs::create_dir_all(&hdir).unwrap();
+    std::fs::write(e.main.join("new2.rs"), "n").unwrap();
     let mut bad = vec![];
     for c in ["git add -A", "git commit -a -m x"] {
         let k = learn(&e, &bash(&e.wt, c));
@@ -549,8 +602,18 @@ fn r15_cwd_in_another_sessions_worktree_in_same_container() {
             "MEASURE cwd = other session's worktree: `{c}` => {}",
             shape(&e, &p)
         );
-        if let Some(x) = rides(&e, &k, &p) {
-            bad.push(x);
+        let d = decide_with(&e, &table_recorded(&e, &k), &p);
+        if d != "allow" {
+            bad.push(format!(
+                "`{c}` in another session's container worktree {} with the learned key {k} => \
+                 {d} (ruling: Allow-eligible)",
+                e.wt2.display()
+            ));
+        }
+        for cwd in [&e.main, &outside, &hdir] {
+            if let Some(x) = rides(&e, &k, &bash(cwd, c)) {
+                bad.push(x);
+            }
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -755,8 +818,15 @@ fn r15_tmp_private_tmp_mixed_spelling_measure() {
 /// repo ...)". In the real layout the own worktree sits in a worktree STORAGE
 /// root (`.harness-worktrees`, `$HOME/.condukt/worktrees`), where the
 /// protected-path rule is lifted for the checkout's own files (user ruling
-/// 2026-10-03, `exclude.rs` PROTECTED_GLOBS doc). Expected per the askrules
-/// spec: not Allow in any of the three containers.
+/// 2026-10-03, `exclude.rs` PROTECTED_GLOBS doc).
+///
+/// re-anchored 2026-11-28 (leader ruling: rules source copy follows 2026-10-03)
+/// Before: expected not Allow in any of the three containers. After: the
+/// source copy inside a container worktree follows ruling 2026-10-03 (Allow
+/// is permitted, measured and printed, not asserted either way); the rules
+/// DEPLOYED in the plugin cache (`$HOME/.claude/plugins/cache/<mkt>/blastguard/
+/// <ver>/rules/ask-rules.toml`, sandbox HOME) are never Allow, with the cwd in
+/// any of the three container worktrees.
 #[test]
 fn r15_bundled_rules_write_in_real_worktree_containers() {
     let e = env_prod("rules");
@@ -766,6 +836,11 @@ fn r15_bundled_rules_write_in_real_worktree_containers() {
     let ct = e.home.join(".condukt").join("worktrees").join("run-t1");
     std::fs::create_dir_all(ct.parent().unwrap()).unwrap();
     git(&e.main, &["worktree", "add", "-q", ct.to_str().unwrap()]);
+    let cached = e
+        .home
+        .join(".claude/plugins/cache/yukineko/blastguard/0.2.1010/rules/ask-rules.toml");
+    std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+    std::fs::write(&cached, "").unwrap();
     let mut bad = vec![];
     for w in [&e.wt, &cc, &ct] {
         let f = w.join("crates/blastguard/rules/ask-rules.toml");
@@ -776,11 +851,18 @@ fn r15_bundled_rules_write_in_real_worktree_containers() {
             "tool_input": {"file_path": f, "content": "[[allow]]\n"},
         });
         let d = decide_with(&e, &no_table(&e), &p);
-        println!("MEASURE Write {} => {d}", f.display());
+        println!("MEASURE source copy Write {} => {d}", f.display());
+        let p = json!({
+            "hook_event_name": "PreToolUse", "session_id": SID, "cwd": w,
+            "tool_name": "Write",
+            "tool_input": {"file_path": cached, "content": "[[allow]]\n"},
+        });
+        let d = decide_with(&e, &no_table(&e), &p);
+        println!("MEASURE plugin cache Write {} => {d}", cached.display());
         if d == "allow" {
             bad.push(format!(
                 "Write {} (cwd {}) => allow",
-                f.display(),
+                cached.display(),
                 w.display()
             ));
         }

@@ -413,15 +413,41 @@ fn shape_not_named_by_any_rule_stays_ask() {
 }
 
 /// (d) the rules file is protected config: a Write tool call to it is never
-/// Allow (the bundled path inside a repo, and the file BLASTGUARD_ASK_RULES
-/// names).
+/// Allow (the rules deployed in the plugin cache under `~/.claude`, and the
+/// file BLASTGUARD_ASK_RULES names). The source copy inside a container
+/// worktree follows user ruling 2026-10-03 (protected-path rule lifted inside
+/// a storage-root checkout).
 #[test]
 fn rules_files_are_protected_from_writes() {
     let e = env("protected");
     let bundled = e.wt.join("crates/blastguard/rules/ask-rules.toml");
     std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
     let over = write_rules(&e, "override.toml", "");
-    for target in [&bundled, &over] {
+    // re-anchored 2026-11-28 (leader ruling: rules source copy follows 2026-10-03)
+    // Before: the worktree source copy was in the never-Allow set. After: it
+    // follows the storage-root lift (Allow); the deployed copy in the plugin
+    // cache (`$HOME/.claude/plugins/cache/...`) takes its place in the set.
+    let cached = e
+        .home
+        .join(".claude/plugins/cache/yukineko/blastguard/0.2.1010/rules/ask-rules.toml");
+    std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+    std::fs::write(&cached, "").unwrap();
+    let src = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": SID,
+        "cwd": e.wt.to_str().unwrap(),
+        "tool_name": "Write",
+        "tool_input": { "file_path": bundled.to_str().unwrap(), "content": "x" },
+    });
+    let r = judged(&e, Some(&over), &src);
+    assert_eq!(
+        decision(&r),
+        "allow",
+        "the source copy in a container worktree follows ruling 2026-10-03: {:?} {:?}",
+        r.stdout,
+        r.stderr
+    );
+    for target in [&cached, &over] {
         let payload = json!({
             "hook_event_name": "PreToolUse",
             "session_id": SID,

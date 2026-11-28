@@ -570,16 +570,39 @@ fn r11_guard_own_keys_and_line_level_redirections() {
     }
     let m = e.main.display().to_string();
     let mut bad = vec![];
-    // Round-10 property pinned on the CLASS (the r10 ride test now passes by
-    // the `-C` refusal alone, whatever another worktree is classed): with
-    // cwd = this session's worktree, another session's worktree is never an
-    // Allow-eligible class.
+    // Formerly the round-10 property pinned on the CLASS ("with cwd = this
+    // session's worktree, another session's worktree is never an
+    // Allow-eligible class"); superseded as below.
+    // re-anchored 2026-11-28 (user ruling 「コンテナ内なら可」)
+    // Before: another session's worktree (wt2, same container) was never an
+    // Allow-eligible class. After: a path strictly inside any container
+    // worktree is `s4-worktree` (asserted for the rm targets; the `-C` forms
+    // are measured and printed). Kept: the main tree and a HOME path are
+    // never an Allow-eligible class from cwd = wt.
     let w2 = e.wt2.display().to_string();
+    for c in [format!("rm -rf {w2}/build"), format!("rm -rf {w2}/src")] {
+        let k = shape(&e, &bash(&e.wt, &c))["shape"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let class = k.split('|').nth(1).unwrap_or("");
+        if class != "s4-worktree" {
+            bad.push(format!("`{c}` (cwd wt) => {k} (ruling: s4-worktree)"));
+        }
+    }
     for c in [
-        format!("rm -rf {w2}/build"),
-        format!("rm -rf {w2}/src"),
         format!("git -C {w2} add -A"),
         format!("git -C {w2} clean -fdx"),
+    ] {
+        println!("MEASURE `{c}` (cwd wt) => {}", shape(&e, &bash(&e.wt, &c)));
+    }
+    let hm = e.home.display().to_string();
+    for c in [
+        format!("rm -rf {m}/build"),
+        format!("rm -rf {m}/src"),
+        format!("git -C {m} add -A"),
+        format!("git -C {m} clean -fdx"),
+        format!("rm -rf {hm}/docs"),
     ] {
         let k = shape(&e, &bash(&e.wt, &c))["shape"]
             .as_str()

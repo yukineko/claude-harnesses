@@ -54,7 +54,10 @@
 //! command of the line relinks too, two readings of one command, or an
 //! unmodelled command that names a relinking verb together with a component
 //! of the target or a non-literal word — the redirect is an `Ask`, never an
-//! `Allow` (CLAUDE.md §3).
+//! `Allow` (CLAUDE.md §3). On a line made only of programs from a closed list
+//! whose argv runs nothing (`jq`, `echo`, `git commit`, …) and `cd`
+//! (an assignment-only command is never data), no command names a relinking
+//! verb whatever its quoted data says ([`names_relink_verb`], backlog 3de4729f).
 //!
 //! Not modelled (residual, recorded in docs/specs/blastguard.md): a relink by
 //! a command whose text names neither a relinking verb nor the target (an
@@ -434,6 +437,8 @@ fn relinked(
         .any(|s| s.text.split_whitespace().any(|w| w == "done"));
     let mut ops: Vec<LinkOp> = Vec::new();
     let mut unmodelled: Vec<String> = Vec::new();
+    // Computed at most once per line, and only when a segment is parsed.
+    let mut line_is_data: Option<bool> = None;
     for (k, seg) in segs.iter().enumerate() {
         // The write's own segment: its own command runs after its
         // redirections are opened, but the substitutions in its words run
@@ -457,9 +462,12 @@ fn relinked(
         let cwd = seg_cwds.get(k).cloned().unwrap_or(CwdState::Unknown);
         // Relinkers in substitutions and escape bodies (nested.rs).
         let found = nested::collect(command, &cwd, !own);
-        let inert = |text: &str, cwd: &CwdState| matches!(parse(text, cwd.clone()), Parsed::Inert);
+        let line_is_data = *line_is_data.get_or_insert_with(|| line_is_relink_data(line));
+        let inert = |text: &str, cwd: &CwdState| {
+            matches!(parse(text, cwd.clone(), line_is_data), Parsed::Inert)
+        };
         if !own {
-            match parse(command, cwd.clone()) {
+            match parse(command, cwd.clone(), line_is_data) {
                 Parsed::Inert => {}
                 Parsed::Op(op) => ops.push(op),
                 // Read as a relinker only for words whose commands `found`
@@ -473,7 +481,7 @@ fn relinked(
             }
         }
         for c in &found.commands {
-            match parse(&c.text, c.cwd.clone()) {
+            match parse(&c.text, c.cwd.clone(), line_is_data) {
                 Parsed::Inert => {}
                 Parsed::Op(op) => ops.push(op),
                 Parsed::Unmodelled if inert(&c.reduced, &c.cwd) => {}
@@ -556,8 +564,9 @@ fn copies_plainly(spelling: &str, real: &str) -> bool {
 
 /// Parse one segment's simple command. Leading assignments and the plain
 /// exec wrappers are skipped; any other command that names a relinking verb
-/// is [`Parsed::Unmodelled`].
-fn parse(command: &str, cwd: CwdState) -> Parsed {
+/// is [`Parsed::Unmodelled`]; `line_is_data` is [`line_is_relink_data`] of
+/// the whole line.
+fn parse(command: &str, cwd: CwdState, line_is_data: bool) -> Parsed {
     let words = plain_words(command);
     let i = command_start(&words);
     let Some(head) = words.get(i).map(|w| normalized_command(w)) else {
@@ -617,7 +626,7 @@ fn parse(command: &str, cwd: CwdState) -> Parsed {
         "install" | "ginstall" if short("l") => Kind::Opaque,
         "install" | "ginstall" => return Parsed::Inert,
         "rsync" => Kind::Opaque,
-        _ if words.iter().any(|w| is_relink_word(w)) => return Parsed::Unmodelled,
+        _ if names_relink_verb(command, line_is_data) => return Parsed::Unmodelled,
         _ => return Parsed::Inert,
     };
     // `cp`/`mv`/`install`/`ln`: the shared getopt split, so `-t` inside a
@@ -744,6 +753,115 @@ fn is_relink_word(word: &str) -> bool {
     ) || ["symlink", "os.link", "rename", "os.replace", "hardlink"]
         .iter()
         .any(|k| lower.contains(k))
+}
+
+/// `git` subcommands that touch no work-tree entry whatever their operands:
+/// they write only below `.git` (objects, the index, refs and their lock
+/// files), or nothing. Their argv — a commit message, a `--trailer`, a
+/// pathspec — is data for this layer. `log` / `show` / `diff` are not listed:
+/// `--output=<file>` makes them create a file anywhere.
+const GIT_NO_WORKTREE_ENTRY: &[&str] = &["commit", "add", "status"];
+
+/// Whether the simple command `c` is one whose argv is DATA for this layer:
+/// a program that runs no argument under any option and creates, renames or
+/// replaces no work-tree entry other than through a redirect (judged on its
+/// own). A CLOSED list, in the direction of `readonly::argv_is_data_only`
+/// (which it extends): an unlisted program keeps the whitespace reading.
+/// `jq` (filters are jq programs, which cannot run a command or create a
+/// file), `echo` / `printf` (print their operands), and `git` with only the
+/// global options `-C DIR` / `--no-pager` / `-P` before a
+/// [`GIT_NO_WORKTREE_ENTRY`] subcommand (`git -c …` can set a command-valued
+/// key, so it is not listed).
+///
+/// The program must be named plainly: a bare literal command word (no `/`:
+/// `./echo` may be any program) with no prefix assignment (`GIT_EXTERNAL_DIFF=…
+/// git diff`, `PATH=… cat` change what runs). `printf -v` (it assigns a
+/// shell variable, `PATH` included) is not listed. Every word read for the
+/// decision must be a literal; an undetermined one is not data.
+fn argv_is_relink_data(c: &super::ast::SimpleCommand) -> bool {
+    let word = |i: usize| match c.argv.get(i).map(|w| &w.value) {
+        Some(super::ast::Value::Literal(s)) => Some(s.as_str()),
+        _ => None,
+    };
+    if !c.assignments.is_empty() {
+        return false;
+    }
+    let Some(head) = word(0) else {
+        // A redirect-only command runs nothing; an undetermined command word
+        // may be any program.
+        return c.argv.is_empty();
+    };
+    if head.contains('/') {
+        return false;
+    }
+    if head == "printf" {
+        return !c.argv[1..]
+            .iter()
+            .any(|w| !matches!(&w.value, super::ast::Value::Literal(s) if !s.starts_with("-v")));
+    }
+    if super::readonly::argv_is_data_only(head) || matches!(head, "jq" | "echo") {
+        return true;
+    }
+    if head != "git" {
+        return false;
+    }
+    let mut i = 1;
+    loop {
+        match word(i) {
+            Some("-C") => i += 2,
+            Some("--no-pager" | "-P") => i += 1,
+            Some(sub) => return GIT_NO_WORKTREE_ENTRY.contains(&sub),
+            None => return false,
+        }
+    }
+}
+
+/// Whether the unmodelled simple command `command` names a relinking verb
+/// where it may RUN (backlog 3de4729f).
+///
+/// The whitespace reading names a relinking verb anywhere in the text
+/// (quotes trimmed, so the `rsync` of `-m "fix rsync"` counts). It is kept
+/// for every program whose argv may be a command line — an unknown program
+/// may exec an operand by name (`busybox ln`, `strace -f ln`) or run a quoted
+/// argument as a program of its own (`sed '1e ln …'`, `gdb -ex 'shell ln
+/// …'`). (A verb glued to other text, such as vim's `!ln`, is not a word of
+/// this reading; that residual predates backlog 3de4729f.)
+///
+/// It is NOT applied when `line_is_data` holds ([`line_is_relink_data`]):
+/// every simple command of the WHOLE line is a program whose argv is data,
+/// or a `cd` (an assignment-only command is not data). Then nothing on the
+/// line runs a word of it — there is no shell, interpreter or unknown program
+/// to hand it to (`echo 'ln …' | sh` has `sh`) and no command that remaps a
+/// name (`alias`, `hash`, `export`, `read`, a function definition) — so
+/// `jq '.t="fix rsync"' f` and `git commit -m "… rsync …"` name no relinking
+/// verb. This only removes readings, on such lines only (CLAUDE.md §3).
+fn names_relink_verb(command: &str, line_is_data: bool) -> bool {
+    !line_is_data && plain_words(command).into_iter().any(is_relink_word)
+}
+
+/// Whether the AST (`ast::analyze`) determines `line` and every simple
+/// command that runs in it — those of a `$( )` / `<( )` and of every
+/// segment included — is a program whose argv is data
+/// ([`argv_is_relink_data`]) or a plain `cd`. An assignment-only command is
+/// never data (user ruling 2026-11-22), so a line holding one is `false`.
+/// A function definition makes `ast::analyze` undetermined, so `false`; any
+/// other program on the line (a shell, `read`, `export`, `hash`, `alias`, an
+/// undetermined command word) is `false` too.
+fn line_is_relink_data(line: &str) -> bool {
+    let super::ast::Analysis::Known(script) = super::ast::analyze(line) else {
+        return false;
+    };
+    script.commands.iter().all(|c| match c.argv.first() {
+        // User ruling 2026-11-22 (3de4729f): an assignment-only command is
+        // never treated as data, whatever it assigns. (A redirection-only
+        // command, e.g. the `esac > f` of a compound command, has no
+        // assignments and runs nothing.)
+        None => c.assignments.is_empty(),
+        Some(first) if matches!(&first.value, super::ast::Value::Literal(h) if h == "cd") => {
+            c.assignments.is_empty()
+        }
+        Some(_) => argv_is_relink_data(c),
+    })
 }
 
 /// An unmodelled command that names a relinking verb may relink `t` when it

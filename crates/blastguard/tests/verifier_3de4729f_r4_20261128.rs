@@ -313,7 +313,7 @@ const FP_PREEXISTING_UNMODELLED: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: FP (pre-existing, Ask at base and 6fdb22556) — arithmetic / subscript-flag word read as an unmodelled relinker"]
+#[ignore = "RED(8b3902f7): FP (pre-existing, Ask at base and 6fdb22556) — arithmetic / subscript-flag word read as an unmodelled relinker"]
 fn fp_preexisting_unmodelled_is_allow() {
     let fx = fixture("fp-pre");
     expect(

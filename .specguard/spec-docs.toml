@@ -1003,3 +1003,13 @@ reason = "B.5 sudo/doas unwrap (SUBSET.md Table B.3 `sudo`, `doas` row, user rul
 path = "crates/blastguard/src/detect/ast/b5/driver_repo.rs"
 doc = "docs/specs/script-quarantine.md"
 reason = "§12 (user ruling 2026-11-28, backlog b6726716): in /flow driver sessions only, clean tracked files under the same repo's scripts/ (own worktree or main tree, matched by git common dir) are Allow via driver_trusted; `python3 -m pytest <f>` only when the whole scripts/ subtree is clean with no ignored pytest config, safe flags, read-only line and no PYTEST_* env; undetermined -> Deny; non-driver sessions keep Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/brace_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す' (backlog 66e7a741, 46145358): static comma groups outside quotes are expanded once at the segment word layer; >256 expanded words -> Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/high_blast.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す': analyze_high_blast_tier and high_blast_outside_tree_rm read the brace-expanded segment (backlog 66e7a741, 46145358)."

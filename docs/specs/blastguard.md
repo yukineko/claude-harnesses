@@ -699,6 +699,11 @@ forge・condukt のスケジューラが再利用）。
   `Undetermined`（未知の option）は pipe/here-document 供給時に Ask を記録したうえで program も判定する。
   code interpreter は従来の `stage_has_program_operand` のまま。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`。
+- **segment の語は shell と同じく brace 展開してから各 detector に渡す（`detect/brace_words.rs`、
+  `detect/high_blast.rs` の `analyze_high_blast_tier` / `high_blast_outside_tree_rm`、backlog 66e7a741, 46145358）** —
+  引用・エスケープの外にある静的なカンマ群（入れ子・連続を含む）を展開し、`git reset {--hard,HEAD}` は
+  `git reset --hard HEAD`、`{rm,-rf} /etc` は `rm -rf /etc` として判定する。代入語・引用内・置換を含む語・
+  `{x}`/`{}`・連番 `{a..c}` は書かれたまま。1 segment の展開語数が 256 を超えたら判定不能として Ask。
 - **shell へ流し込むブレースグループはメンバー出力の連結を program として読む（`detect/payload/brace_feeder.rs`、
   `detect/ast/support.rs` の `brace_group_stdin`、`detect/ast/b5.rs` の `piped_by_compound_stage`、backlog 7eb86bb3）** —
   `{ echo …; printf …; } | bash` のメンバーが全て素の `echo` か静的に評価できる `printf` で、区切りが

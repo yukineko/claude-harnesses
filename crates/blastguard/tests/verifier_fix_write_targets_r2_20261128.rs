@@ -248,7 +248,7 @@ fn repo_cwd(fx: &Fx) -> PathBuf {
 // ================================================================ HOLES
 
 #[test]
-#[ignore = "RED: observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
+#[ignore = "RED(5c848034): observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
 fn hole_generic_fallthrough_subcommands_that_write_a_named_path() {
     // The fall-through scans only `--output` (archive: `-o`). These git
     // subcommands write a path named on the command line by another spelling.
@@ -272,7 +272,7 @@ fn hole_generic_fallthrough_subcommands_that_write_a_named_path() {
 }
 
 #[test]
-#[ignore = "RED: observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
+#[ignore = "RED(5c848034): observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
 fn hole_alias_hides_init_subcommand() {
     // A non-`!` alias is not exec-banned; `sub` is the alias name, so the
     // init arm never runs.
@@ -287,7 +287,7 @@ fn hole_alias_hides_init_subcommand() {
 }
 
 #[test]
-#[ignore = "RED: observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
+#[ignore = "RED(5c848034): observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
 fn hole_work_tree_moved_by_global_option_or_config() {
     // `--work-tree` global without `-a` / `core.worktree` via `-c`: the
     // tracked settings.json / hooks/x.sh land in ~/.claude.
@@ -311,7 +311,7 @@ fn hole_work_tree_moved_by_global_option_or_config() {
 }
 
 #[test]
-#[ignore = "RED: observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
+#[ignore = "RED(5c848034): observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
 fn hole_git_apply_in_an_ancestor_of_claude() {
     // `git apply` writes the paths its patch names below the directory it runs
     // in; run in $HOME a patch for `.claude/settings.json` rewrites it.
@@ -351,7 +351,7 @@ fn hole_git_rm_recursive_pathspec_spellings_in_main_tree() {
 }
 
 #[test]
-#[ignore = "RED: observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
+#[ignore = "RED(5c848034): observed 2026-11-28 on 043e51270 (verifier r2 of fix-write-targets): allow while real git wrote the protected path"]
 fn hole_partially_quoted_relative_rm_of_settings() {
     holes(
         &[

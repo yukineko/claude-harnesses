@@ -680,37 +680,6 @@ exit 101: f4/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
 
 [[task]]
-id = "ea96e65d"
-title = "blastguard detector: relative-path rm/mv of protected config or tree containers is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Measured on main 5de28ea57 (RED commit f330b1d20, test crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs). Allow observed: (1) cwd ~/.claude: rm settings.json / rm -f settings.json / rm -f ./settings.json (absolute rm -f ~/.claude/settings.json is Deny via protected-path-disarm); (2) git apply --unsafe-paths --directory=HOME/.claude with a patch file from the scratchpad, cwd worktree; (3) mv HOME/src/.harness-worktrees/ to scratchpad/moved (moves all linked worktrees), cwd worktree; (4) cwd = main tree: rm -rf src. Note: cases (2) and (3) are Allow even with absolute paths, so the hole is wider than relative-path resolution. Not measured: absolute rm -rf MAIN/src verdict. Controls GREEN: absolute rm -f of settings.json Deny; rm -f out.txt in scratchpad Allow. git worktree add under ~/.claude is tracked separately in 96faed52. Reported by independent verifier on fp-ask-rules (verifier8_ask_learning_20261128.rs r8_detector_relative_rm_of_claude_settings_is_allow)."
-created_at = 1795836503
-updated_at = 1795836503
-weight = 0.0
-issue_number = 2018
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/2018"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
-rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
-observed_at = 1795836503
-detail = """
-exit 101: -worktrees/red-relative-protected/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
-     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""
-
-[[task]]
 id = "4e7fc8e2"
 title = "blastguard detector: git/touch/mkdir write targets still reach protected or system paths (8 shapes after 96faed52)"
 project = "/Users/yuki/src/harness"
@@ -803,3 +772,101 @@ exit 101: 0.2.1013 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
      Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-6a284a858e8f7598)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[[task]]
+id = "f63b97b3"
+title = "blastguard detector: 7 protected-target shapes still Allow after ea96e65d (git apply --stat --apply / --dir= / cwd, quoted relative rm, mv of worktree-store parent, separate-git-dir main tree, git rm -r in main tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Independent verifier of ea96e65d (commit 18accae2f, crates/blastguard/tests/backlog_20261128_relative_protected_verifier.rs, 7 ignored REDs). git apply 3 shapes observed rewriting ~/.claude/settings.json with real git. (1) apply.rs returns Allow on any of --check/--stat/--numstat/--summary even when --apply follows; (2) --dir= abbreviation not recognised; (3) git apply run with cwd/-C inside ~/.claude not judged; (4) rm -f "settings.json" / 'settings.json' with cwd ~/.claude Allow (unquoted is Deny); (5) mv <home>/src (parent of .harness-worktrees) Allow; (6) shared_main_tree returns Known(false) when .git is a file (separate-git-dir primary); (7) git rm -r src in a shared main tree Allow. (5) and (7) expectation is the verifier's analogy - confirm when fixing."""
+created_at = 1795842815
+updated_at = 1795842815
+weight = 0.0
+issue_number = 2023
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2023"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier -- --ignored"
+rev = "6e0e6dec57cf3afea24246ff4f20e908a8a80303"
+observed_at = 1795842815
+detail = """
+exit 101:  passed; 7 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-9bd61be8b48bcf3d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_relative_protected_verifier`"""
+
+[[task]]
+id = "ad84b715"
+title = "blastguard FP: multi-line git commit -m message line mentioning 'git apply ... <patch>' refused as git apply reading through <"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28, reason: git apply/am reads its patch through `<` (not a here-document): the patch cannot be read here. RED on main b19e77851: main ask / subagent deny; single-line message with same words = allow. Cause candidate: src/detect/git_apply_patch.rs read_patch_readers splits the command per physical line, so a message line inside a double-quoted -m arg becomes its own segment. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f3_*)."
+created_at = 1795842446
+updated_at = 1795842446
+weight = 0.0
+issue_number = 2022
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2022"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f3_commit_message_mentioning_git_apply_lt_patch_same_as_without"
+rev = "206effeaffea4fbf87b9e9e4b033d322c00e0312"
+observed_at = 1795842446
+detail = """
+exit 101: d in 0.58s
+
+   Compiling blastguard v0.2.1011 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-1d0f6662a14f81b8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "e5518fa6"
+title = "blastguard FP: quoted heredoc .rs append body with a bang-backtick string line read as a redirect when later commands follow (rustfmt && cargo test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28 subagent Deny (reason quoted in the test file). RED on main b19e77851: main deny / subagent deny; same body with no tail = allow. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f2_*). Ruling: heredoc body judged by target language; .rs body is data unless run."
+created_at = 1795843300
+updated_at = 1795843300
+weight = 0.0
+issue_number = 2024
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2024"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f2_rs_heredoc_append_bang_backtick_then_rustfmt_cargo_test_same_as_plain -- --ignored"
+rev = "97bc40be49772fbdd169ea624011b2d87a95226c"
+observed_at = 1795843300
+detail = """
+exit 101:  in 0.63s
+
+   Compiling blastguard v0.2.1012 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-336490f42eff98a9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""

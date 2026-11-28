@@ -1956,3 +1956,28 @@ driver セッションでは `ask` を出さない機構を blastguard 自身に
   `ask-hardened-to-deny` として payload ごと記録する。2 度目 deny の ask 化は行わない。`Deny` は不変。
 - 登録が無い・stale・別セッション・registry 読み取り不能・payload パース不能では判定を変えない。
 - RED: `crates/blastguard/tests/backlog_20261121_flow_driver_session_never_asks.rs`。
+
+## cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除（backlog ea96e65d）
+
+絶対パスでは Deny/Ask になる破壊的コマンドが、cwd 依存の綴りや別経路で Allow だった 4 件の fail-open の是正。
+いずれも既存の判定関数へ「正しく正規化した値」を流す形で、判定不能は制限側へ倒す。
+
+- 相対 operand の保護判定（`detect/protected.rs::cwd_joined`）: `protected_disarm_deny` / `protected_tree_deny`
+  （`rm` operand、`mv` の source）は、相対 operand を segment の絶対 cwd に結合した絶対パスも判定する
+  （従来は `..` を含むものだけ）。cwd が `~/.claude` の `rm settings.json` / `rm -f ./settings.json` は絶対綴りと同じ Deny。
+  `~` / `$` を含む綴りと cwd 不明は従来どおり lexical 判定のみ。
+- `git apply`（`detect/git/apply.rs::git_apply_verdict`）: `--directory=<v>` / `--directory <v>` の値を cwd（`git -C` 反映後）基準で絶対化し、
+  `protected_landing_block` / `protected_path_block` に通す（保護パスそのもの＝Ask、保護パスを含むディレクトリ＝Ask、
+  自 linked worktree checkout 内は従来どおり免除）。値が置けない・値が無い・`-C` が置けないときは Ask。
+  `--unsafe-paths` は patch が work tree 外（`../` 経由）へ書けるようにし、patch 本文は command line に無いので Ask。
+  `--check` / `--stat` / `--numstat` / `--summary` は書かないので従来どおり。
+- `mv` の source（`detect/protected.rs::worktree_move_ask`）: worktree storage root そのもの（linked worktree の container）、
+  または linked worktree checkout 自身（`SafeRoots::classify_worktree` / `is_linked_worktree_checkout`。rm 側と同じ置き場判定）は Ask。
+  glob は literal prefix で置く。置けないが綴りに `worktrees` を含むものも Ask。storage 外・worktree 内の通常ファイルの mv は不変。
+- main tree の tracked 再帰削除（`deletion.rs::judge_project_operand`、`reversible::TreeGitFacts::shared_main_tree`）:
+  `decide_project` が class 5（git から復元可能）で Allow とした operand でも、tracked を含み、かつ work-tree root が
+  「linked worktree を 1 つ以上持つ primary checkout（`.git` がディレクトリで `.git/worktrees/*` が存在）」であるときは
+  `NotAllowed`（従来の confined Ask / Deny へ落ちる）。`.git/worktrees` の読み取り失敗・`.git` の型が想定外は `None`＝`NotAllowed`。
+  linked worktree を持たない単独 checkout の挙動（`tests/rm_by_target.rs` の class 5 Allow）は変えない。
+  class 4（ignored build output）は tracked==0 なので対象外。
+- RED: `crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs`。

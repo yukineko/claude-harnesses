@@ -6,6 +6,7 @@ use super::{
 
 // Backlog 606a93ab: the other-worktree discard verdict (user ruling
 // 2026-11-20), split out to keep this file under the file-growth limit.
+mod apply;
 mod other_worktree;
 use other_worktree::{
     linked_checkout_is_clean, managed_discard, other_worktree_discard, ManagedWt,
@@ -1671,6 +1672,9 @@ from the working tree)",
         // Backlog ef7c9fbe: a clone outside the managed places is Ask. See
         // `scratch_place`.
         "clone" => super::scratch_place::clone_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
+        // Backlog ea96e65d: `--directory` / `--unsafe-paths` move where the
+        // patch is written. See `git_apply_verdict`.
+        "apply" => apply::git_apply_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
         _ => Decision::Allow,
     }
 }

@@ -4594,14 +4594,12 @@ const DP: &str = "/home/yuki/proj";
 fn del_facts(status: &[(&str, &str)], tracked: usize) -> crate::reversible::TreeGitFacts {
     crate::reversible::TreeGitFacts {
         toplevel: DP.to_string(),
-        status: status
-            .iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect(),
+        status: status.iter().map(|&(a, b)| (a.into(), b.into())).collect(),
         tracked,
         submodule: false,
         hidden_index_state: false,
         build_dirs: Vec::new(),
+        shared_main_tree: Determination::known(false),
     }
 }
 

@@ -709,3 +709,32 @@ exit 101: rness-worktrees/red-git-output/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
      Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-4c0613a04b74e827)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_git_output_protected_config`"""
+
+[[task]]
+id = "ea96e65d"
+title = "blastguard detector: relative-path rm/mv of protected config or tree containers is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main 5de28ea57 (RED commit f330b1d20, test crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs). Allow observed: (1) cwd ~/.claude: rm settings.json / rm -f settings.json / rm -f ./settings.json (absolute rm -f ~/.claude/settings.json is Deny via protected-path-disarm); (2) git apply --unsafe-paths --directory=HOME/.claude with a patch file from the scratchpad, cwd worktree; (3) mv HOME/src/.harness-worktrees/ to scratchpad/moved (moves all linked worktrees), cwd worktree; (4) cwd = main tree: rm -rf src. Note: cases (2) and (3) are Allow even with absolute paths, so the hole is wider than relative-path resolution. Not measured: absolute rm -rf MAIN/src verdict. Controls GREEN: absolute rm -f of settings.json Deny; rm -f out.txt in scratchpad Allow. git worktree add under ~/.claude is tracked separately in 96faed52. Reported by independent verifier on fp-ask-rules (verifier8_ask_learning_20261128.rs r8_detector_relative_rm_of_claude_settings_is_allow)."
+created_at = 1795836503
+updated_at = 1795836503
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
+rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
+observed_at = 1795836503
+detail = """
+exit 101: -worktrees/red-relative-protected/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
+     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""

@@ -302,15 +302,20 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     ) {
         return TargetClass::Worktree;
     }
-    // The session's own tree (the payload cwd), unless the cwd is `$HOME` or
-    // one of its ancestors, which is not a worktree.
+    // The session's own tree (the payload cwd). Being under the cwd places
+    // nothing: the class is the KIND of tree the cwd is (spec Components 1):
+    // a linked worktree is Worktree, a main working tree is MainTree (never
+    // Allow), and a cwd that is no git tree (`~/.claude`, `~/src`, `$HOME`)
+    // gives no class here, so the path falls to Home / Undetermined below.
     if let Some(c) = ctx.cwd.map(crate::exclude::normalize) {
-        let home = ctx.home.map(|h| h.trim_end_matches('/'));
-        let cwd_is_home_or_above = c == "/"
-            || home
-                .is_some_and(|h| h == c || h.starts_with(&format!("{}/", c.trim_end_matches('/'))));
-        if !cwd_is_home_or_above && (norm == c || norm.starts_with(&format!("{c}/"))) {
-            return TargetClass::Worktree;
+        if c.starts_with('/')
+            && (norm == c || norm.starts_with(&format!("{}/", c.trim_end_matches('/'))))
+        {
+            match repo_kind(&realpath(&c)) {
+                RepoKind::Linked => return TargetClass::Worktree,
+                RepoKind::Main => return TargetClass::MainTree,
+                RepoKind::Unknown => {}
+            }
         }
     }
     if let Some(h) = ctx.home.map(|h| h.trim_end_matches('/')) {

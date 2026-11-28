@@ -159,6 +159,13 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
                     let v = resolve_at(&cmd.cwd, v);
                     if let Value::Literal(p) = &v {
                         written.insert(key_of(p, &cmd.cwd), None);
+                        // `cp f DEST` / `mv f DEST` write `DEST/<basename f>`
+                        // when DEST is a directory: the entry actually written
+                        // may be a symlink out of DEST, so the class of DEST
+                        // alone does not place the write (CLAUDE.md §3).
+                        if dir_dest_writer(cmd) && (p.ends_with('/') || is_existing_dir(p)) {
+                            facts.targets.push(Target::Undetermined);
+                        }
                     }
                     facts.targets.push(target_of(v));
                 }
@@ -189,6 +196,31 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
         }
     }
     Some(facts)
+}
+
+/// `cmd` is a copy / move / install / link command that writes
+/// `DEST/<basename SRC>` when DEST is a directory.
+fn dir_dest_writer(cmd: &SimpleCommand) -> bool {
+    let Some(first) = cmd.argv.first() else {
+        return false;
+    };
+    let Value::Literal(name) = &first.value else {
+        return true;
+    };
+    let base = name.rsplit('/').next().unwrap_or(name);
+    matches!(
+        base,
+        "cp" | "gcp" | "mv" | "gmv" | "install" | "ginstall" | "ln" | "gln" | "rsync" | "ditto"
+    )
+}
+
+/// `p` is, or cannot be shown not to be, an existing directory (an unreadable
+/// path is not shown to be a non-directory: restrictive side).
+fn is_existing_dir(p: &str) -> bool {
+    match std::fs::metadata(p) {
+        Ok(m) => m.is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// Marker key of [`Written`]: an undetermined or unmodelled write happened.

@@ -33,6 +33,14 @@ const UNQUOTED_META: &[char] = &['*', '?', '[', ']', '{', '}', '(', ')', '\\', '
 /// Whether `command` is one simple command whose every word is a static
 /// literal. See the module docs.
 pub(crate) fn is_single_static_command(command: &str) -> bool {
+    // zsh (the Bash tool's shell) reads an unquoted `<->` / `<1-9>` as a
+    // numeric glob where brush reads a redirect. A line with any unquoted
+    // `<` is therefore not a static simple command. (`>` is not refused: a
+    // zsh numeric glob always opens with `<`, and an output redirect with a
+    // static target is an existing, tested Allow shape.)
+    if has_unquoted_lt(command) {
+        return false;
+    }
     let Ok(program) = parse(command) else {
         return false;
     };
@@ -53,6 +61,29 @@ pub(crate) fn is_single_static_command(command: &str) -> bool {
         return false;
     };
     simple_is_static(simple)
+}
+
+/// Whether the raw line has a `<` outside `'..'` / `".."` (a backslash
+/// outside single quotes hides the next char from this scan, but such a word
+/// is refused by [`is_static_word`] anyway). An unbalanced quote counts as
+/// unquoted from there on only for the purpose of staying restrictive: the
+/// scan simply keeps the quote state to the end.
+fn has_unquoted_lt(s: &str) -> bool {
+    let (mut single, mut double, mut esc) = (false, false, false);
+    for c in s.chars() {
+        if esc {
+            esc = false;
+            continue;
+        }
+        match c {
+            '\\' if !single => esc = true,
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '<' if !single && !double => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn simple_is_static(c: &SimpleCommand) -> bool {

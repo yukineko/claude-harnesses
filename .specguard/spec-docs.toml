@@ -1043,3 +1043,58 @@ reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・
 path = "crates/blastguard/src/detect/git/apply.rs"
 doc = "docs/specs/blastguard.md"
 reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' bullet `git apply`: --directory value placed against cwd and judged as a write target, --unsafe-paths Ask, unplaceable value Ask (backlog ea96e65d)."
+
+[[spec]]
+path = "crates/blastguard/src/askrules/mod.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Rule files and the judging module' (+ 'Evaluation'): the public entry Facts / RuleSet / Judgement and the single pure `judge` (deny of any set -> poison check -> allow eligibility -> not_learnable -> allow without matching except -> NoMatch); no I/O, no env."
+
+[[spec]]
+path = "crates/blastguard/src/askrules/rules.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Rule files and the judging module' 'Format' + 'Allow, except ... and regex on the restrictive side only': strict TOML schema parser and matcher (unknown key/type/decision, empty reason or match disables that file's Allow rules, poisons_allow), *_regex only on deny/not_learnable/except and a broken regex counts as MATCHED."
+
+[[spec]]
+path = "crates/blastguard/src/askrules/builtin.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "sections 'Invariants fixed in code (builtin.rs)' and 'Positive allow-list': allow_eligible gate no rule file can change (class none/worktree/scratchpad only, every verb in MODELLED_TOOLS, no `?` verb, no system_harm, one static simple command)."
+
+[[spec]]
+path = "crates/blastguard/src/learned.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Components' 2 'blastguard (verdict side)': reads the learned table (Absent/Undetermined/Known), converts it to a RuleSet and routes an Ask through askrules::judge; a non-Ask decision is returned unchanged, an unreadable table is never an Allow and adds a note to the Ask."
+
+[[spec]]
+path = "crates/blastguard/src/shape.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Components' 1/2 and rulings rounds 3-4 (R1-R3, git repository class, items 9-10): turns the evaluator's Facts into an asklearn::Shape (rule_id + target class + verbs); class from git's own rev-parse answer, an unresolved target or failed probe is Undetermined, never Allow-eligible."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/shape.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Components' 1 verb rules R1/R2 and round-4 rulings: derives the shape Facts (verbs with subcommand and normalised options, program hash, resolved write targets) from the same evaluated AST the detectors judge; unresolved values stay Undetermined / `?`."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/shape/git.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "rulings of 2026-11-28 rounds 3/4 (items 5 and 9): splits git global options (-C, -c, --git-dir, --work-tree) from the subcommand and resolves which repositories a git write acts on; an unestablishable repository gives Target::Undetermined and a `?` verb (Deny-learnable, never Allow)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/shape/interp.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "round-4 ruling item 8 'More interpreters': awk/make/deno/bun/osascript/php/uv/tsx/lua program (file content hash, inline body hash, or unpinned `?`) for the shape verb; an unresolved word is never a literal."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/static_simple.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Lines an Allow can apply to' items 1, 2 and 6: is_single_static_command decides on the brush AST (and no unquoted `< > ! | & ;` in the raw text) that a line is one simple command, no redirect, only static literal words; anything undeterminable is false so the Ask stands."
+
+[[spec]]
+path = "crates/overwatch/src/ask_learn.rs"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Components' 3 'Learner' (`overwatch ask-learn`): joins block-log Asks to transcript outcomes (decline / approval / hook denial excluded), recomputes shapes via `blastguard shape`, writes the table atomically with a cursor, records promotions, file-reds; failure keeps the old table and writes status.json."
+
+[[spec]]
+path = "crates/overwatch/src/ask_learn_red.tmpl"
+doc = "docs/specs/blastguard-ask-learning.md"
+reason = "section 'Components' 3 bullet `overwatch ask-learn file-reds`: template of the generated `learned_shape_<8hex>.rs` #[ignore = RED(learned ...)] test asserting the sample commands are Allow with an empty learned table."

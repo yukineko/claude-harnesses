@@ -2004,8 +2004,8 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // reading a protected file is harmless, writing one is the hazard.
         "cp" | "mv" | "install" | "ln" => analyze_copy_move(cmd, rest, ctx),
         // Round 2: the single-file and empty-directory twins of `rm`, which had
-        // no arm at all. See `analyze_unlink_rmdir`.
-        "unlink" | "rmdir" => analyze_unlink_rmdir(cmd, rest, ctx),
+        // no arm at all, plus the creation verbs (96faed52). See `analyze_unlink_rmdir`.
+        "unlink" | "rmdir" | "touch" | "mkdir" => analyze_unlink_rmdir(cmd, rest, ctx),
         // Egress: exfiltration via curl/wget upload flags and nc/netcat fed a
         // file on stdin. See `analyze_fetch` / `analyze_nc`. Remote-exec
         // (fetch piped into a shell/interpreter) is handled separately, across

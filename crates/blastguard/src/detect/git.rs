@@ -1212,6 +1212,20 @@ fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decisio
     if let Some(reason) = irreversible_git_subcommand(&sub, &rest[idx + 1..]) {
         return Decision::deny(reason);
     }
+    // Backlog 96faed52: a path git itself writes (`--output=F`, `-o DIR`,
+    // `worktree add PATH`, `bundle create F`) goes through the same
+    // protected-path judgement as a `cp` destination. Only a non-Allow
+    // verdict is returned here; the per-subcommand arms below still run for
+    // everything else.
+    let write_verdict = super::fileops::write_targets::git_write_target_verdict(
+        ctx,
+        &rest[..idx],
+        &sub,
+        &rest[idx + 1..],
+    );
+    if !matches!(write_verdict, Decision::Allow) {
+        return write_verdict;
+    }
     match sub.as_str() {
         "clean" => {
             let has_f = has_short(rest, 'f') || rest.contains(&"--force");

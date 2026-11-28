@@ -204,6 +204,25 @@ fn spelling_is_real(raw: &str, abs: &str, real: &str) -> bool {
         && std::path::Path::new(real)
             .components()
             .eq(std::path::Path::new(abs).components())
+        && no_symlink_component(abs)
+}
+
+/// Whether no component of `abs` is a symlink (dangling or not): each prefix
+/// is `lstat`ed, so a write through a link whose target does not exist yet is
+/// seen. A component that does not exist ends the walk (nothing below it can
+/// be a link); any other lstat failure is "cannot tell" = `false`.
+fn no_symlink_component(abs: &str) -> bool {
+    let mut cur = std::path::PathBuf::new();
+    for comp in std::path::Path::new(abs).components() {
+        cur.push(comp);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() => return false,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 /// `p` with every symlink resolved ([`realpath`]), or `None` when no prefix of

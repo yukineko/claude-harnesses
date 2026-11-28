@@ -59,7 +59,9 @@ fn simple_is_static(c: &SimpleCommand) -> bool {
     let Some(name) = &c.word_or_name else {
         return false;
     };
-    if !is_static_word(&name.value) {
+    // Only a bare command name: a path-spelled word (`./git`, `<dir>/git`)
+    // runs an arbitrary file the shape key does not identify.
+    if name.value.contains('/') || !is_static_word(&name.value) {
         return false;
     }
     let prefix = c.prefix.iter().flat_map(|p| p.0.iter());
@@ -115,7 +117,8 @@ fn is_fd_word(w: &Word) -> bool {
 /// Whether the shell word `raw` is a static literal: nothing in it is
 /// expanded, split, globbed or unescaped. Decided on the brush word pieces.
 pub(crate) fn is_static_word(raw: &str) -> bool {
-    if raw.is_empty() {
+    // zsh (the Bash tool's shell) expands a leading `=word` to a command path.
+    if raw.is_empty() || raw.starts_with('=') {
         return false;
     }
     let Ok(pieces) = parse_word(raw) else {

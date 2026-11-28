@@ -738,6 +738,8 @@ pub(super) fn is_redirect_token(tok: &str) -> bool {
 /// AND ending in `>`" — `2>&1` and `>&2` end in a digit and carry their own
 /// target, so they consume only themselves.
 pub(super) fn is_bare_redirect_op(tok: &str) -> bool {
+    // zsh clobber `>!` / `>>!` / `2>!` / `&>!` owns the next word too.
+    let tok = tok.strip_suffix('!').unwrap_or(tok);
     tok.ends_with('>')
         && tok
             .chars()

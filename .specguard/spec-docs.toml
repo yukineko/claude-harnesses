@@ -1018,3 +1018,8 @@ reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展�
 path = "crates/blastguard/src/detect/high_blast.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す': analyze_high_blast_tier and high_blast_outside_tree_rm read the brace-expanded segment (backlog 66e7a741, 46145358)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/redirect/words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module 責務 bullet detect/redirect/words: single definition of a redirect word (operator / owns-next-word), zsh clobber >! second target candidate, redirect words stripped before git add / rm judgment (backlog ffa05737 D1/D2, 0e79c339 D3)."

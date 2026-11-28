@@ -1698,6 +1698,19 @@ forge・condukt のスケジューラが再利用）。
   （`Effect::shell_spelling`）を host に渡す。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
+- **`detect/redirect/words`** — redirect 語の読み方の唯一の定義（backlog ffa05737 D1/D2、0e79c339 D3）。
+  `redirect_word_shape` が「この語は redirect 演算子か／次の語を target に持つか」を決める
+  （`>` `>>` `2>` `&>` `>!` `>>!` `2>!` `&>!` `>|` `>&` `<` は次の語が target、`2>&1` `>log` `>!log` は target 付き）。
+  (1) zsh（Bash tool のシェル）の clobber 形 `>!` / `>>!` / `2>!` / `&>!` は、truncating / append スキャナが
+  target を `!` と読むため後ろの実 path が未判定だった。target 語が `!` で始まるときは、`!` の後ろ
+  （`!` 単独なら次の語）を**第二の target 候補**として追加で判定する（bash 読みの `!` も従来どおり判定）。
+  (2) `git add -A 2>&1` / `> log` では redirect 語が pathspec に数えられ、全ツリー sweep の Ask が
+  「path 限定」の Allow になっていた。`git_stage` は quote 解釈済みの語から、先頭が演算子の redirect 語
+  （と detached なら次の語）を取り除いて判定し、語の途中に unquoted の `>`/`<` がある形（`a>b`）は Ask。
+  (3) scratchpad の `rm -rf build 2>&1` / `> log` が redirect 語を operand（path）と数えて Deny だった。
+  `detect` の rm dispatch は redirect 語を取り除いた語列を `analyze_rm` に渡す（redirect 先自体は redirect 規則が判定する）。
+  語列の quote を追えない形（`\` 、backtick、`$(`、quote 文字を含む語）では取り除かず従来どおりに読む。
+  `words::is_bare_redirect_op` も `>!` 系を「次の語を持つ」演算子として扱う。
 
 ## 安定 rule id（overwatch 署名の粒度確保）
 

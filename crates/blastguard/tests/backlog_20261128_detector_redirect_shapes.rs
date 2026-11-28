@@ -157,7 +157,6 @@ fn run_zsh(dir: &Path, home: &Path, script: &str) {
 }
 
 #[test]
-#[ignore = "RED(ffa05737): zsh >! / >>! / 2>! to protected config is Allow (detector reads `> !`)"]
 fn d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow() {
     let e = env("d1");
     // Precondition (observed): zsh writes the path AFTER `>!` / `>>!` and
@@ -223,7 +222,6 @@ fn d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow() {
 }
 
 #[test]
-#[ignore = "RED(ffa05737): redirect after `git add -A` turns whole-tree staging Ask into Allow"]
 fn d2_redirect_after_git_add_all_keeps_whole_tree_ask() {
     let e = env("d2");
     assert_eq!(
@@ -250,7 +248,6 @@ fn d2_redirect_after_git_add_all_keeps_whole_tree_ask() {
 }
 
 #[test]
-#[ignore = "RED(0e79c339): output redirect turns scratchpad `rm -rf build` Ask into Deny"]
 fn d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny() {
     let e = env("d3");
     assert_eq!(

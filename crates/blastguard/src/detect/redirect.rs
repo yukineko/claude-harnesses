@@ -10,6 +10,8 @@ use crate::model::Decision;
 use crate::scope::Placement;
 use harness_core::verdict::Determination;
 
+pub(in crate::detect) mod words;
+
 /// Re-express a redirect target relative to where its segment really runs.
 ///
 /// `Ok(target)` is the text every axis should judge: unchanged for an
@@ -992,6 +994,11 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             // of the text) is no redirect either: see `skip_redirect_word_gap`.
             if tok != "-" && !redirect_word_missing_at_line_end(bytes, start, j) {
                 targets.push(tok.to_string());
+                // zsh `>!` clobber: the real target follows the `!`.
+                if let Some((real, end)) = words::clobber_bang_target(seg, bytes, start, j) {
+                    targets.push(real);
+                    j = end;
+                }
             }
             i = j;
             continue;
@@ -1037,8 +1044,14 @@ pub(super) fn append_redirect_targets(seg: &str) -> Vec<String> {
             // delimiters, so `seg[start..j]` never splits a multi-byte char.
             let start = skip_redirect_word_gap(bytes, i + 2);
             let j = redirect_word_end(bytes, start);
+            let mut j = j;
             if start < j {
                 targets.push(seg[start..j].to_string());
+                // zsh `>>!` clobber: the real target follows the `!`.
+                if let Some((real, end)) = words::clobber_bang_target(seg, bytes, start, j) {
+                    targets.push(real);
+                    j = end;
+                }
             }
             i = j.max(i + 2);
             continue;

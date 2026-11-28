@@ -348,6 +348,15 @@ pub(super) fn advance_cwd_and_rewrite(
         };
         return (seg.to_string(), None, new_cwd);
     }
+    // A `trap` whose hook signal (DEBUG / ERR / RETURN, or zsh's TRAPDEBUG
+    // / TRAPERR / TRAPRETURN function) runs before later commands can change
+    // the directory those commands run in (measured in bash and zsh,
+    // 2026-11-28). The body is not run here, so unless it is plainly
+    // cwd-neutral the cwd after it is not knowable: Unknown (restrictive),
+    // never `cwd` unchanged (backlog 21d05411).
+    if trap_hook_may_change_cwd(seg) {
+        return (seg.to_string(), None, CwdState::Unknown);
+    }
     if head == "popd" {
         // `popd` returns to whatever the matching `pushd` displaced. This
         // pass tracks only the CURRENT top of the directory stack, not the
@@ -679,14 +688,99 @@ pub(super) fn cwd_rewrite_was_lost(before: &[&str], after: &[&str]) -> bool {
 /// [`CwdState::Unknown`].
 pub(super) fn line_changes_cwd_before(line: &str, seg_idx: usize) -> bool {
     split_segments(line).iter().take(seg_idx).any(|s| {
-        s.split_whitespace()
-            .next()
-            .map(|w| {
-                matches!(
-                    normalized_command(strip_edge_parens(w)).as_str(),
-                    "cd" | "pushd" | "popd"
-                )
-            })
-            .unwrap_or(false)
+        trap_hook_may_change_cwd(s)
+            || s.split_whitespace()
+                .next()
+                .map(|w| {
+                    matches!(
+                        normalized_command(strip_edge_parens(w)).as_str(),
+                        "cd" | "pushd" | "popd"
+                    )
+                })
+                .unwrap_or(false)
     })
+}
+
+/// Hook signals whose trap body runs around every later command (bash:
+/// DEBUG, ERR, RETURN; zsh also defines them as `TRAP<NAME>` functions).
+fn is_hook_signal(word: &str) -> bool {
+    let w = word
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_ascii_uppercase();
+    let w = w.strip_prefix("SIG").unwrap_or(&w);
+    matches!(w, "DEBUG" | "ERR" | "RETURN")
+}
+
+/// A non-hook signal name or number given to `trap` (`EXIT`, `INT`, `0`).
+fn is_other_signal(word: &str) -> bool {
+    let w = word.to_ascii_uppercase();
+    let w = w.strip_prefix("SIG").unwrap_or(&w);
+    !w.is_empty()
+        && w.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+/// Whether `seg` installs a hook-signal trap (or defines a zsh `TRAP<HOOK>`
+/// function) whose body is not plainly cwd-neutral. FAIL-CLOSED: the body is
+/// cwd-neutral only when it is a quoted string with no expansion whose every
+/// command head is in a small allowlist of utilities that cannot change the
+/// shell's directory. Anything else answers true.
+fn trap_hook_may_change_cwd(seg: &str) -> bool {
+    let words: Vec<&str> = seg.split_whitespace().collect();
+    if words.iter().any(|w| {
+        let b = w
+            .trim_start_matches(['{', '('])
+            .split('(')
+            .next()
+            .unwrap_or("");
+        matches!(
+            b.to_ascii_uppercase().as_str(),
+            "TRAPDEBUG" | "TRAPERR" | "TRAPRETURN"
+        )
+    }) {
+        return true;
+    }
+    let Some(pos) = words.iter().position(|w| *w == "trap") else {
+        return false;
+    };
+    if pos != 0 {
+        return words[pos + 1..].iter().any(|w| is_hook_signal(w));
+    }
+    let args = &words[1..];
+    if !args.iter().any(|w| is_hook_signal(w)) {
+        return false;
+    }
+    let mut end = args.len();
+    while end > 0 && (is_hook_signal(args[end - 1]) || is_other_signal(args[end - 1])) {
+        end -= 1;
+    }
+    let body_words = &args[..end];
+    // `trap - DEBUG` / `trap '' DEBUG`: reset / ignore, runs nothing.
+    if matches!(body_words, [] | ["-"] | ["''"] | ["\"\""]) {
+        return false;
+    }
+    let body = body_words.join(" ");
+    let quoted = body.len() >= 2
+        && ((body.starts_with('\'') && body.ends_with('\''))
+            || (body.starts_with('"') && body.ends_with('"')));
+    if !quoted {
+        return true;
+    }
+    let inner = &body[1..body.len() - 1];
+    if inner.contains(['$', '`', '(', ')', '\'', '"', '\\', '<', '>']) {
+        return true;
+    }
+    const NEUTRAL: &[&str] = &[
+        "echo", "printf", "true", "false", ":", "rm", "touch", "date", "ls", "cat", "test", "[",
+        "pwd", "wc", "head", "tail", "sleep",
+    ];
+    !inner
+        .split([';', '&', '|', '\n'])
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .all(|c| {
+            c.split_whitespace()
+                .next()
+                .is_some_and(|h| NEUTRAL.contains(&h))
+        })
 }

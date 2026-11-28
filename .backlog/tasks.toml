@@ -743,3 +743,34 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.22s
      Running tests/verifier13_ask_learning_20261128.rs (target/debug/deps/verifier13_ask_learning_20261128-a1ab0af4cc8d46df)
 error: test failed, to rerun pass `-p blastguard --test verifier13_ask_learning_20261128`"""
+
+[[task]]
+id = "8b3902f7"
+title = "blastguard FP: zsh subscript flags / arithmetic over a substitution are Ask (echo $(( $(wc -l < in.json) + 1 )) > n, echo ${arr[(r)x]} > f) - AST cannot model them, pre-existing at cf33a5b2c"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Found by round-4 verifier of 3de4729f; test crates/blastguard/tests/verifier_3de4729f_r4_20261128.rs::fp_preexisting_unmodelled_is_allow (ignored). Ask comes from nested::collect Undetermined -> unmodelled; fixing needs AST support for zsh subscript flags and arithmetic expansion, not a relaxation."
+created_at = 1795882872
+updated_at = 1795882872
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier_3de4729f_r4_20261128 fp_preexisting_unmodelled_is_allow -- --ignored --exact"
+rev = "cf71f43312b2d21578f3d9e54958110f2f93c501"
+observed_at = 1795882872
+detail = """
+exit 101:   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/verifier_3de4729f_r4_20261128.rs (target/debug/deps/verifier_3de4729f_r4_20261128-1e0f950ddfe5d99f)
+error: test failed, to rerun pass `-p blastguard --test verifier_3de4729f_r4_20261128`"""

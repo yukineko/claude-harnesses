@@ -100,6 +100,21 @@ doc = "docs/specs/blastguard.md"
 reason = "relink bullet extension (backlog 3de4729f): a word that runs code while zsh expands it (glob qualifier `(e…)` / `(+fn)` read with zsh's qualifier grammar, `=( )`, `${(…)`, `$~`, `print -P` operand) is an unmodelled relinker, an Ask; helper of detect/relink.rs."
 
 [[spec]]
+path = "crates/blastguard/src/detect/fileops/write_targets/unmodelled.rs"
+doc = "docs/specs/blastguard.md"
+reason = "git write-target extension (backlog 5c848034): an unmodelled git subcommand's path-looking operands (and, for unpack-file/bugreport/diagnose, its cwd) are judged as landings — protected/system → Ask; READ_ONLY verbs and BUILTINS table; `-c alias.X=` resolution with builtin shadowing; helper of write_targets.rs."
+
+[[spec]]
+path = "crates/blastguard/src/detect/fileops/write_targets/git_config.rs"
+doc = "docs/specs/blastguard.md"
+reason = "git write-target extension (backlog 5c848034 round 2): static read (no subprocess) of .git/config and ~/.gitconfig [alias] and [remote] url/pushurl so stored aliases and remote names resolve to their landings; unreadable config contributes nothing and visible-word judgement remains."
+
+[[spec]]
+path = "crates/blastguard/src/detect/protected/operand.rs"
+doc = "docs/specs/blastguard.md"
+reason = "protected/system path judgement (backlog 5c848034 round 2): single quote-removal entry via the shell word parser, so system-dir, protected-path, landing and git_moved_dir checks all see the unquoted spelling (`\"/etc\"/f` judged as `/etc/f`)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/relink/nested.rs"
 doc = "docs/specs/blastguard.md"
 reason = "relink bullet extension naming `detect/relink/nested.rs` (backlog 00c6c2b8): relinkers run inside $( )/backticks/<( ) and shell -c / vi ex `:!` escape bodies are modelled as commands of their own; undetermined bodies or depth cap are an unmodelled relinker (Ask)."

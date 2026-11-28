@@ -726,6 +726,8 @@ notes = "Measured on main 5de28ea57 (RED commit f330b1d20, test crates/blastguar
 created_at = 1795836503
 updated_at = 1795836503
 weight = 0.0
+issue_number = 2018
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2018"
 rev = 0
 
 [task.repro]

@@ -860,6 +860,8 @@ notes = "Observed by verifier11 (2026-11-28): git config core.worktree <main> is
 created_at = 1795857027
 updated_at = 1795857027
 weight = 0.0
+issue_number = 2028
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2028"
 rev = 0
 
 [task.repro]

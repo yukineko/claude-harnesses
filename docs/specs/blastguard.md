@@ -207,6 +207,20 @@ forge・condukt のスケジューラが再利用）。
   その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
   未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout・
   絶対 path でない toplevel・porcelain v1 として読めない status 出力 — は全て Ask。
+- **`>` 以外の書き込み先も保護設定判定に流す（`detect/fileops/write_targets.rs`、backlog 96faed52、blastguard 0.2.1008）** —
+  git 自身が書く path と、symlink 越しに作る verb の operand を、`cp` 宛先・`tee`・`sort -o` と同じ
+  `protected_path_block`（symlink を辿る）+ `protected_glob_deny` + `system_landing_block` に通す。対象:
+  `git diff|log|show|whatchanged|diff-tree|diff-index|diff-files|range-diff|format-patch|archive` の
+  `--output=F` / `--output F`（`--ou` 以上の前方一致省略形。`--output-indicator-*` 等は別 option で対象外）、
+  `git format-patch -o DIR|-oDIR|--output-directory DIR`、`git archive -o F`、`git bundle create F`、
+  `git worktree add PATH`（最初の operand。`-b`/`-B`/`--reason` の値は除く）、`git worktree move WT DEST`
+  （2 番目）。相対 path は `-C`/`--work-tree` を累積した directory 起点で置く（`git_moved_dir`）。
+  `touch` / `mkdir` の operand は同じ判定を通すので、リンク先が保護 path の dangling symlink
+  （`touch dlink`）は止まる（`touch -h`/`--no-dereference` は link 自身を変えるので字面のまま判定。
+  `-d`/`-r`/`-t`/`-A`・`mkdir -m` の値は operand ではない）。判定不能は Ask: 値の無い write option、値が
+  runtime 展開（`$`・backtick）または空、`-C` 等の directory が置けないときの相対 target。通常の
+  `git diff --output=out.patch`（worktree 内の plain file）は Allow のまま。**残余**: `git clone`/`init` の
+  宛先、`git checkout-index --prefix`、`git config --file` などは対象外（別 rule または未対応）。
 - **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
   他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
   （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。

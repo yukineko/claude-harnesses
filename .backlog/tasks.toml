@@ -680,37 +680,6 @@ exit 101: f4/crates/blastguard)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
 
 [[task]]
-id = "96faed52"
-title = "blastguard detector: git --output to protected config is Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p0",
-]
-touched_files = []
-status = "pending"
-notes = "Observed on main f60cd1d6e (RED at ee9eca672): Allow for git diff/log/show --output=<HOME>/.claude/settings.json, git diff --output <path> (separate arg), git diff --output=<HOME>/.claude/hooks/pre.sh, git worktree add <HOME>/.claude/hooks/w, touch dlink / touch <abs>/dlink where dlink is a dangling symlink -> <HOME>/.claude/hooks/new.sh. Real git confirmed --output forms overwrite the target. Not reproduced: cp payload dlink via the same dangling link (already not Allow). Controls green: cp payload <HOME>/.claude/settings.json not Allow; git diff --output=out.patch Allow. Test: crates/blastguard/tests/backlog_20261128_detector_git_output_protected_config.rs (branch red-git-output)."
-created_at = 1795835829
-updated_at = 1795835829
-weight = 0.0
-issue_number = 2017
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/2017"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
-rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
-observed_at = 1795835829
-detail = """
-exit 101: rness-worktrees/red-git-output/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
-     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-4c0613a04b74e827)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_git_output_protected_config`"""
-
-[[task]]
 id = "ea96e65d"
 title = "blastguard detector: relative-path rm/mv of protected config or tree containers is Allow"
 project = "/Users/yuki/src/harness"
@@ -740,3 +709,97 @@ exit 101: -worktrees/red-relative-protected/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
      Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""
+
+[[task]]
+id = "4e7fc8e2"
+title = "blastguard detector: git/touch/mkdir write targets still reach protected or system paths (8 shapes after 96faed52)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the independent verifier of 96faed52 (commit 879a21288, test crates/blastguard/tests/backlog_20261128_git_write_targets_verifier.rs, 8 ignored REDs, each shape observed writing with real git/touch). (1) --work-tree relative --output resolved from work tree but git resolves from process cwd; (2) format-patch -o <protected dir itself>; (3) worktree add into an existing empty protected dir; (4) stash show -p / reflog / alias --output; (5) git config --file/-f <protected>; (6) checkout-index --prefix=<protected>/; (7) git init / clone / --git-dir init under protected; (8) touch/mkdir into /etc, /System not routed through system_landing_block (cp is Deny). 4-8 were Allow already at 0.2.1005."
+created_at = 1795836857
+updated_at = 1795836857
+weight = 0.0
+issue_number = 2019
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2019"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier -- --ignored"
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836857
+detail = """
+exit 101:  0 passed; 8 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-50f611af92b15e30)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_git_write_targets_verifier`"""
+
+[[task]]
+id = "ffa05737"
+title = "blastguard detector: redirect shapes fail open (zsh >!/>>!/2>! to protected config Allow; redirect after git add -A drops whole-tree Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main b19e77851 (RED tests committed e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). D1 (test d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow): Allow for 'echo x >! ~/.claude/settings.json', 'echo x >>! ...', 'echo x 2>! ...', 'echo x >! <main>/.githooks/pre-commit' (cwd linked worktree); '&>!' was NOT Allow on main. Controls '>' / '>>' are not Allow. Precondition observed in test: zsh -f -c writes the path after >! / >>! and creates no '!' file. Suspected cause (from verifier, not verified): brush reads '> !' + argument. D2 (test d2_redirect_after_git_add_all_keeps_whole_tree_ask): 'git add -A' is Ask but 'git add -A 2>&1', '> /dev/null', '> log' are Allow; cause (redirect words counted as pathspecs) not verified. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_zsh_bang_clobber_overwrites_protected_config / r9_detector_redirect_drops_git_add_sweep_ask)."
+created_at = 1795840960
+updated_at = 1795840960
+weight = 0.0
+issue_number = 2020
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2020"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow -- --ignored"
+rev = "eebe135729a339e59f3f5a194401a2ec8b7312c4"
+observed_at = 1795840960
+detail = """
+exit 101: 0.2.1012 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.97s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-66b9e1fbd52ee302)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[[task]]
+id = "0e79c339"
+title = "blastguard detector FP: output redirect turns scratchpad 'rm -rf build' Ask into Deny (rm-recursive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main b19e77851 (RED tests e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). cwd = <root>/scratchpad under /private/tmp/claude-askrules: 'rm -rf build' is Ask, but 'rm -rf build 2>&1' and 'rm -rf build > log' are Deny. A redirect of rm's output does not change what rm deletes. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_redirect_turns_scratchpad_rm_ask_into_deny)."
+created_at = 1795841017
+updated_at = 1795841017
+weight = 0.0
+issue_number = 2021
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2021"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny -- --ignored"
+rev = "bd213c9bc85bfc5bfb8f47eaf8ecee01b330b516"
+observed_at = 1795841017
+detail = """
+exit 101: 0.2.1013 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-6a284a858e8f7598)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""

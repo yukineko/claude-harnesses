@@ -98827,3 +98827,67 @@ rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "96faed52"
+title = "blastguard detector: git --output to protected config is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed on main f60cd1d6e (RED at ee9eca672): Allow for git diff/log/show --output=<HOME>/.claude/settings.json, git diff --output <path> (separate arg), git diff --output=<HOME>/.claude/hooks/pre.sh, git worktree add <HOME>/.claude/hooks/w, touch dlink / touch <abs>/dlink where dlink is a dangling symlink -> <HOME>/.claude/hooks/new.sh. Real git confirmed --output forms overwrite the target. Not reproduced: cp payload dlink via the same dangling link (already not Allow). Controls green: cp payload <HOME>/.claude/settings.json not Allow; git diff --output=out.patch Allow. Test: crates/blastguard/tests/backlog_20261128_detector_git_output_protected_config.rs (branch red-git-output)."
+created_at = 1795835829
+updated_at = 1795836848
+weight = 0.0
+issue_number = 2017
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2017"
+issue_closed_at = 1795836850
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
+rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
+observed_at = 1795835829
+detail = """
+exit 101: rness-worktrees/red-git-output/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
+     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-4c0613a04b74e827)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_git_output_protected_config`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
+exit = 0
+passed = 5
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836847
+output_digest = "sha256:a698d3488dddafa887cfbf6f658045e68fb6ee9d934dbd4cce0bec72c4a0be32"
+excerpt = """
+
+running 5 tests
+test git_worktree_add_under_protected_hooks_is_not_allow ... ok
+test control_direct_cp_to_protected_config_is_not_allow ... ok
+test control_git_diff_output_to_plain_file_is_allow ... ok
+test dangling_symlink_write_into_protected_hooks_is_not_allow ... ok
+test git_output_option_to_protected_config_is_not_allow ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-947cce8f2a1d6ad4)
+"""
+
+[task.closure.red]
+rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

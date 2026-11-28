@@ -678,3 +678,32 @@ exit 101: f4/crates/blastguard)
     Finished `release` profile [optimized] target(s) in 31.98s
      Running tests/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling.rs (target/release/deps/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling-95006f08cfa2b02c)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
+
+[[task]]
+id = "24fa1aa6"
+title = "blastguard: rm through <symlink>/.. reaches ~/.claude/settings.json but is Allow (rm -f) / Ask (rm -rf); direct spelling is Deny (lexical .. collapse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795833934
+updated_at = 1795833934
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config -- --ignored"
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+observed_at = 1795833934
+detail = """
+exit 101: es/red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
+     Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-3e19a779c1c810c2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config`"""

@@ -43,11 +43,14 @@ fn assert_never_allow(cases: &[String]) {
             bad.push(format!("main={d:?} sub={h:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "rebind resolved as the confined literal:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "rebind resolved as the confined literal:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
-#[ignore = "RED(a6603095): round3 prebound rebinds"]
 fn measured_posix_and_hook_rebinds_are_never_allow() {
     assert_never_allow(&[
         format!("export POSIXLY_CORRECT=1; P={OK}; P=/etc/hosts :; {W}"),
@@ -59,7 +62,6 @@ fn measured_posix_and_hook_rebinds_are_never_allow() {
 }
 
 #[test]
-#[ignore = "RED(a6603095): round3 prebound rebinds"]
 fn unmeasured_same_family_rows_are_never_allow() {
     assert_never_allow(&[
         format!("typeset POSIXLY_CORRECT=1; P={OK}; P=/etc/hosts :; {W}"),
@@ -86,7 +88,6 @@ fn unmeasured_same_family_rows_are_never_allow() {
 // cmdpalias zchpwd zchpwdfns zmultiname as rebinding; `command g`, precmd,
 // preexec and pipe-last-bash measured NOT rebinding).
 #[test]
-#[ignore = "RED(a6603095): round3 prebound rebinds"]
 fn measured_function_named_like_builtin_or_quoted_call_is_never_allow() {
     assert_never_allow(&[
         format!("printf(){{ P=/etc/hosts; }}; P={OK}; printf x; {W}"),
@@ -118,5 +119,9 @@ fn removed_false_positives_stay_allow() {
             bad.push(format!("{d:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "false positive vs base:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "false positive vs base:\n{}",
+        bad.join("\n")
+    );
 }

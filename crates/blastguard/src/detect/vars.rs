@@ -327,12 +327,12 @@ pub(super) fn binds_name_as_operand(head: &str) -> bool {
 /// coarseness here (a `printf` mentioning `BIN` anywhere, a `local` at top
 /// level where bash would error) costs resolutions and never invents one.
 pub(super) fn segment_may_rebind(seg: &str, name: &str) -> bool {
-    segment_may_rebind_with(seg, name, false)
+    segment_may_rebind_with(seg, name, false, true)
 }
 
 /// [`segment_may_rebind`]; `exempt_ok` lets a bare `name` operand of a
 /// non-binding command pass ([`exemption_disabled`] decides, per command).
-pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) -> bool {
+pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool, posix: bool) -> bool {
     let words = quote_aware_words(seg);
     let Some(first) = words.first() else {
         return false;
@@ -340,6 +340,19 @@ pub(super) fn segment_may_rebind_with(seg: &str, name: &str, exempt_ok: bool) ->
     let head = normalized_command(first);
     if matches!(head.as_str(), "eval" | "source" | ".") {
         return true;
+    }
+    // A prefix assignment on a SPECIAL builtin persists under POSIX mode
+    // (`set -o posix; P=/b :` leaves P=/b), and a prefix on `eval` is not
+    // known to be transient either (backlog f3301770, measured by the
+    // verifier): the name is rebound.
+    if let Some((hi, h)) = command_head(&words) {
+        let prefix_binds = words[..hi].iter().any(|w| {
+            word_binds_name(w, name) || tied_partner(name).is_some_and(|p| word_binds_name(w, p))
+        });
+        if prefix_binds && (h == "eval" || (posix && POSIX_SPECIAL_BUILTINS.contains(&h.as_str())))
+        {
+            return true;
+        }
     }
     if binds_name_as_operand(&head)
         && words[1..].iter().any(|w| {
@@ -633,6 +646,727 @@ pub(super) fn segment_mentions_name(seg: &str, name: &str, exempt_ok: bool) -> b
 /// definition. The exemption is off for the whole command then.
 pub(super) fn exemption_disabled(cmd: &str) -> bool {
     parsed_command_may_redefine_words(cmd) || exemption_disabled_by_words(cmd)
+}
+
+/// POSIX special builtins: under POSIX mode a prefix assignment on one of
+/// these persists in the shell.
+const POSIX_SPECIAL_BUILTINS: &[&str] = &[
+    ":", ".", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
+    "shift", "times", "trap", "unset", "source", "typeset", "declare", "local", "integer", "float",
+];
+
+/// What the whole command says about how command words and prefix
+/// assignments behave, decided from the PARSED command (every simple command,
+/// compound bodies included; words after quote removal, backslash removal and
+/// `$'…'` decoding), never from raw text.
+#[derive(Clone, Copy)]
+pub(super) struct ShellModes {
+    /// Something on the line may run code that is not the text of the
+    /// statement being read, so NO earlier binding is believed: an `alias` /
+    /// `unalias` / alias-table write, `.` / `source` / `eval`, any `trap` or
+    /// `TRAP*` function, a function named like a trusted non-binder command
+    /// (`echo(){ … }`; other functions are handled by the function-body
+    /// logic), `PS4`, `zle`, or a command
+    /// word whose value is not a determined literal (a `$NAME` the line
+    /// resolves, or gives only literal values, is substituted instead), an
+    /// arithmetic context that may evaluate a non-numeric variable, or a
+    /// `trap` whose body may bind. An undetermined parse counts (fail
+    /// closed).
+    pub alias: bool,
+    /// POSIX mode may be on (`set -o posix`, `setopt posix_builtins`,
+    /// `unsetopt noposixbuiltins`, `options[posixbuiltins]=`, `emulate sh|ksh`,
+    /// `--posix`, `POSIXLY_CORRECT=`), or an option command has an
+    /// undetermined argument that could enable it. An undetermined parse
+    /// counts.
+    pub posix: bool,
+    /// An `alias NAME=BODY` with an inert literal BODY was seen. It does not
+    /// set `alias` by itself, but the alias could name a function defined on
+    /// the line, so a function definition then does.
+    literal_alias: bool,
+}
+
+impl ShellModes {
+    const NONE: ShellModes = ShellModes {
+        alias: false,
+        posix: false,
+        literal_alias: false,
+    };
+}
+
+/// Facts [`classify_command`] collects for checks that need the whole line:
+/// every name given a value, and every name that got the integer attribute
+/// (`declare -i`, `integer`), whose later assignments are arithmetic.
+#[derive(Default)]
+struct Seen {
+    assigned: Vec<(String, Option<String>)>,
+    int_names: Vec<String>,
+}
+
+/// `words` with each undetermined plain `$NAME` reference replaced by the
+/// literal value the line's own resolver proves for it at segment `idx`
+/// (`RM=/bin/rm; $RM -rf x`): a statically resolved word is substituted, not
+/// treated as unknown. Anything else stays undetermined.
+fn substitute_resolved(cmd: &str, idx: usize, words: &mut [(String, bool)]) {
+    for (w, det) in words.iter_mut() {
+        if *det || referenced_variable_name(w).is_none() {
+            continue;
+        }
+        let origin = resolve_expanded_command_word_with(cmd, idx, w, Some(ShellModes::NONE));
+        if let CommandWordOrigin::Literal(v) = origin {
+            *w = v;
+            *det = true;
+        }
+    }
+}
+
+/// Every literal value the line gives `name` in a pure assignment
+/// (`NAME=v`, `export|declare|readonly|typeset|local NAME=v`); `None` when
+/// any other segment may bind the name, or one of the values is not a
+/// determined literal. A command word `$NAME` is then one of these values.
+fn literal_values_of(cmd: &str, name: &str) -> Option<Vec<String>> {
+    let segs = split_segments_with_separators(cmd);
+    let (is_body, _) = here_document_layout(&segs);
+    let mut values = Vec::new();
+    for (idx, seg) in segs.iter().enumerate() {
+        if is_body.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        let words = quote_aware_words(&seg.text);
+        let lead = words.first().is_some_and(|w| {
+            matches!(
+                w.as_str(),
+                "export" | "declare" | "readonly" | "typeset" | "local"
+            )
+        });
+        let body = &words[usize::from(lead)..];
+        let pure = !body.is_empty() && body.iter().all(|w| is_assignment(w));
+        if !pure {
+            if segment_may_rebind(&seg.text, name) {
+                return None;
+            }
+            continue;
+        }
+        for w in body {
+            let Some((n, v)) = w.split_once('=') else {
+                continue;
+            };
+            if n.trim_end_matches('+') != name {
+                continue;
+            }
+            if n.ends_with('+') || has_unresolvable_expansion(v) {
+                return None;
+            }
+            values.push(unquote_literal_value(v)?);
+        }
+    }
+    (!values.is_empty()).then_some(values)
+}
+
+/// The command-word variants to classify: when the first word is an
+/// unresolved plain `$NAME`, one variant per literal value the line gives
+/// NAME ([`literal_values_of`]); otherwise the words as they are.
+fn head_variants(cmd: &str, words: &[(String, bool)]) -> Vec<Vec<(String, bool)>> {
+    if let Some((w, false)) = words.first() {
+        if let Some(values) = referenced_variable_name(w).and_then(|n| literal_values_of(cmd, &n)) {
+            return values
+                .into_iter()
+                .map(|v| {
+                    let mut variant = words.to_vec();
+                    variant[0] = (v, true);
+                    variant
+                })
+                .collect();
+        }
+    }
+    vec![words.to_vec()]
+}
+
+fn is_plain_number(v: &str) -> bool {
+    let d = v.strip_prefix('-').unwrap_or(v);
+    !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())
+}
+
+/// True when the arithmetic text `expr` may evaluate a variable whose value
+/// is not a plain number (`X='P=1'; (( X ))` runs `P=1`): any identifier in
+/// it that does not resolve, at segment `idx`, to a plain number.
+fn arith_expr_may_assign(cmd: &str, idx: usize, expr: &str) -> bool {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_ascii_digit() {
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[start..i].iter().collect();
+            let word = format!("${{{name}}}");
+            let known = matches!(
+                resolve_expanded_command_word_with(cmd, idx, &word, Some(ShellModes::NONE)),
+                CommandWordOrigin::Literal(v) if is_plain_number(&v)
+            );
+            if !known {
+                return true;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// True when segment `seg` (index `idx`) holds an arithmetic context that
+/// is not provably free of assignments: `(( … ))`, `for (( … ))`, `let …`,
+/// `[[ … -eq|-ne|-lt|-le|-gt|-ge … ]]`, or `$(( … ))` anywhere.
+fn segment_arithmetic_may_assign(cmd: &str, idx: usize, seg: &str) -> bool {
+    let words = quote_aware_words(seg);
+    let mut at = 0;
+    while words.get(at).is_some_and(|w| {
+        matches!(
+            w.as_str(),
+            "then" | "do" | "else" | "elif" | "if" | "while" | "until" | "!" | "time" | "{"
+        )
+    }) {
+        at += 1;
+    }
+    let rest = &words[at..];
+    let text = rest.join(" ");
+    let text = text.trim_start();
+    let text = text.strip_prefix("for").map_or(text, str::trim_start);
+    if let Some(expr) = text.strip_prefix("((") {
+        if arith_expr_may_assign(cmd, idx, expr) {
+            return true;
+        }
+    }
+    match rest.first().map(String::as_str) {
+        Some("let") => {
+            if rest[1..].iter().any(|w| arith_expr_may_assign(cmd, idx, w)) {
+                return true;
+            }
+        }
+        Some("[[")
+            if rest
+                .iter()
+                .any(|w| matches!(w.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge")) =>
+        {
+            let operands = rest.iter().filter(|w| {
+                !matches!(
+                    w.as_str(),
+                    "[[" | "]]"
+                        | "&&"
+                        | "||"
+                        | "!"
+                        | "("
+                        | ")"
+                        | "-eq"
+                        | "-ne"
+                        | "-lt"
+                        | "-le"
+                        | "-gt"
+                        | "-ge"
+                )
+            });
+            for w in operands {
+                if arith_expr_may_assign(cmd, idx, w) {
+                    return true;
+                }
+            }
+        }
+        _ => {}
+    }
+    for w in &words {
+        if w.starts_with('\'') {
+            continue;
+        }
+        if let Some(pos) = w.find("$((") {
+            if arith_expr_may_assign(cmd, idx, &w[pos + 3..]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub(super) fn shell_modes(cmd: &str) -> ShellModes {
+    use super::ast::{analyze, Analysis, Value};
+    let mut modes = ShellModes::NONE;
+    let mut seen = Seen::default();
+    // Each statement is parsed ON ITS OWN: after `alias` / `set -o posix` the
+    // evaluator's state is opaque and the rest of a whole-line analysis turns
+    // `Undetermined`, which would hide the statements that follow. A
+    // statement that does not parse alone (`then …`, `do …`) is read from a
+    // word split with the keywords and operators peeled off, dequoted by
+    // `unquote_literal_value`; a word that does not dequote to a literal is
+    // undetermined.
+    let segs = split_segments_with_separators(cmd);
+    let (is_body, _) = here_document_layout(&segs);
+    for (idx, seg) in segs.iter().enumerate() {
+        if is_body.get(idx).copied().unwrap_or(false) {
+            continue;
+        }
+        // A function that takes the name of a command the NON_BINDERS
+        // exemption trusts (`echo(){ read P; }`) makes that trust false.
+        // Other function names are covered by the function-body handling.
+        // A zsh hook function (`chpwd`) runs without being called.
+        if defined_function_names(&seg.text)
+            .iter()
+            .any(|n| NON_BINDERS.contains(&n.as_str()) || n == "chpwd")
+        {
+            modes.alias = true;
+        }
+        if !modes.alias && segment_arithmetic_may_assign(cmd, idx, &seg.text) {
+            modes.alias = true;
+        }
+        match analyze(&seg.text) {
+            Analysis::Known(script) => {
+                for sc in &script.commands {
+                    let assigns: Vec<(String, Option<String>)> = sc
+                        .assignments
+                        .iter()
+                        .map(|(n, w)| {
+                            // `None` = value NOT determined; the consumer
+                            // ([`note_assignment`]) reads that as "may bind".
+                            (
+                                n.clone(),
+                                if let Value::Literal(s) = &w.value {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                },
+                            )
+                        })
+                        .collect();
+                    let mut words: Vec<(String, bool)> = sc
+                        .argv
+                        .iter()
+                        .map(|w| match &w.value {
+                            Value::Literal(s) => (s.clone(), true),
+                            Value::Undetermined(_) => (w.raw.clone(), false),
+                        })
+                        .collect();
+                    substitute_resolved(cmd, idx, &mut words);
+                    for variant in head_variants(cmd, &words) {
+                        classify_command(&assigns, &variant, &mut modes, &mut seen);
+                    }
+                }
+            }
+            Analysis::Undetermined(_) => {
+                classify_text_statement(cmd, idx, &seg.text, &mut modes, &mut seen);
+            }
+        }
+    }
+    if modes.literal_alias && defines_shell_function(cmd) {
+        modes.alias = true;
+    }
+    // An integer-attribute name evaluates every later value as arithmetic
+    // (`declare -i Y; Y='P=1'` runs `P=1`).
+    if seen.assigned.iter().any(|(n, v)| {
+        let base = n.split('[').next().unwrap_or(n).trim_end_matches('+');
+        seen.int_names.iter().any(|i| i == base) && !v.as_deref().is_some_and(is_plain_number)
+    }) {
+        modes.alias = true;
+    }
+    modes
+}
+
+/// Names defined by a leading `name(){…}` / `name1 name2 (){…}` (zsh defines
+/// every name) / `function name …` statement; empty when the statement is
+/// not a definition.
+pub(super) fn defined_function_names(text: &str) -> Vec<String> {
+    let t = text.trim_start();
+    let t = t.strip_prefix('{').map_or(t, str::trim_start);
+    let (head, keyword) = match t.strip_prefix("function") {
+        Some(rest) if rest.starts_with(char::is_whitespace) => (rest, true),
+        _ => (t, false),
+    };
+    let cut = head.find(['(', '{']).unwrap_or(head.len());
+    let names: Vec<String> = head[..cut].split_whitespace().map(String::from).collect();
+    let valid = !names.is_empty()
+        && names.iter().all(|n| {
+            n.chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+        });
+    if !valid {
+        return Vec::new();
+    }
+    if keyword {
+        return names;
+    }
+    let after = head[cut..].trim_start();
+    let Some(inner) = after.strip_prefix('(') else {
+        return Vec::new();
+    };
+    let Some(body) = inner.trim_start().strip_prefix(')') else {
+        return Vec::new();
+    };
+    // zsh `a b () { … }` defines every name — but only when a compound
+    // command follows; `fn parse() -> Result` (prose, a Rust signature) is
+    // not a definition in any shell.
+    let body = body.trim_start();
+    let compound = body.is_empty()
+        || body.starts_with(['{', '('])
+        || ["if", "for", "while", "until", "case", "select"]
+            .iter()
+            .any(|k| {
+                body.strip_prefix(k)
+                    .is_some_and(|r| r.starts_with(char::is_whitespace))
+            });
+    if names.len() == 1 || compound {
+        names
+    } else {
+        Vec::new()
+    }
+}
+
+/// Command word of a segment: the first word after compound keywords,
+/// opening brackets and prefix assignments, with backslashes and quotes
+/// removed. `None` when it is not a literal.
+pub(super) fn dequoted_command_head(seg: &str) -> Option<(String, String)> {
+    const KEYWORDS: &[&str] = &[
+        "then", "do", "else", "elif", "if", "while", "until", "!", "time", "function",
+    ];
+    for w in quote_aware_words(seg) {
+        let w = w.trim_start_matches(['(', '{']).to_string();
+        if w.is_empty() || KEYWORDS.contains(&w.as_str()) || is_assignment(&w) {
+            continue;
+        }
+        let plain = w.replace('\\', "");
+        return unquote_literal_value(&plain).map(|d| (w, d));
+    }
+    None
+}
+
+/// A name assignment (`NAME=value`, `export NAME=value`, `read NAME`,
+/// `printf -v NAME`, `name[sub]=v`) seen by [`classify_command`]; `value` is
+/// the determined literal value when there is one.
+fn note_assignment(name: &str, value: Option<&str>, modes: &mut ShellModes, seen: &mut Seen) {
+    let base = name.split('[').next().unwrap_or(name).trim_end_matches('+');
+    seen.assigned
+        .push((name.to_string(), value.map(str::to_string)));
+    if base == "PS4" || base == "PS3" {
+        // PS4 (traced commands) and PS3 (`select`, with zsh `promptsubst`)
+        // are expanded (`$(…)`, `$((…))`, `${x=…}`): a literal without `$`,
+        // a backquote, or any backslash / quote escape (`\044` is `$`)
+        // cannot bind anything; any other value, or none at all
+        // (`read PS4`), may.
+        if !value.is_some_and(|v| !v.contains(['$', '`', '\\', '\'', '"'])) {
+            modes.alias = true;
+        }
+    } else if is_command_table_name(name) || base.starts_with("TRAP") || base == "chpwd_functions" {
+        modes.alias = true;
+    }
+    if base == "POSIXLY_CORRECT" || base == "options" {
+        modes.posix = true;
+    }
+}
+
+/// Commands that bind a name, change an option, load code or wrap another
+/// command: an alias or trap body naming one is not inert.
+const BINDER_WORDS: &[&str] = &[
+    "read",
+    "printf",
+    "declare",
+    "typeset",
+    "local",
+    "export",
+    "readonly",
+    "eval",
+    "source",
+    ".",
+    "let",
+    "mapfile",
+    "readarray",
+    "getopts",
+    "set",
+    "setopt",
+    "unsetopt",
+    "shopt",
+    "unset",
+    "trap",
+    "alias",
+    "unalias",
+    "command",
+    "builtin",
+    "exec",
+    "env",
+    "cd",
+    "pushd",
+    "popd",
+    "integer",
+    "float",
+    "vared",
+    "zformat",
+    "zparseopts",
+    "sysread",
+    "zstat",
+    "print",
+    "emulate",
+    "autoload",
+    "functions",
+    "zle",
+    "enable",
+    "hash",
+    "umask",
+    "ulimit",
+    "wait",
+    "coproc",
+    "select",
+    "for",
+    "while",
+    "until",
+    "if",
+    "case",
+    "function",
+    "time",
+    "noglob",
+    "nocorrect",
+    "sudo",
+    "xargs",
+];
+
+/// A trap body that binds nothing: parsed, every command has a determined
+/// head that is not in [`BINDER_WORDS`], no assignment, no arithmetic
+/// context. Such a body is inert whichever signal runs it.
+fn trap_body_binds_nothing(body: &str) -> bool {
+    use super::ast::{analyze, Analysis, Value};
+    if body.contains("((") || body.contains("[[") || body.contains("-v") {
+        return false;
+    }
+    let Analysis::Known(script) = analyze(body) else {
+        return false;
+    };
+    script.commands.iter().all(|sc| {
+        sc.assignments.is_empty()
+            && sc.argv.first().is_some_and(
+                |w| matches!(&w.value, Value::Literal(h) if !BINDER_WORDS.contains(&h.as_str())),
+            )
+    })
+}
+
+/// An alias body that cannot bind a variable: plain words only (no quote,
+/// expansion, operator or assignment), none of them a command that binds a
+/// name, changes an option, or loads code.
+fn alias_body_is_inert(body: &str) -> bool {
+    if body.is_empty()
+        || !body.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    ' ' | '_' | '-' | '.' | '/' | ',' | ':' | '+' | '@' | '%' | '=' | '~'
+                )
+        })
+    {
+        return false;
+    }
+    body.split_whitespace()
+        .all(|w| !BINDER_WORDS.contains(&w) && (!w.contains('=') || w.starts_with('-')))
+}
+
+/// A trap signal that can only fire after the command being read has run
+/// (`EXIT` / `0`); every other signal, and every undetermined one, may run
+/// the trap action between a binding and its use.
+fn trap_signal_is_inert(sig: &str, det: bool) -> bool {
+    det && matches!(sig.trim_start_matches("SIG"), "EXIT" | "0")
+}
+
+/// A statement that did not parse alone, read from its words.
+fn classify_text_statement(
+    cmd: &str,
+    idx: usize,
+    text: &str,
+    modes: &mut ShellModes,
+    seen: &mut Seen,
+) {
+    const KEYWORDS: &[&str] = &[
+        "then", "do", "else", "elif", "if", "while", "until", "!", "{", "(", "time", "function",
+    ];
+    let mut assigns: Vec<(String, Option<String>)> = Vec::new();
+    let mut words: Vec<(String, bool)> = Vec::new();
+    for w in quote_aware_words(text) {
+        let w = w.trim_start_matches(['(', '{']).to_string();
+        if w.is_empty() {
+            continue;
+        }
+        if words.is_empty() && KEYWORDS.contains(&w.as_str()) {
+            continue;
+        }
+        if words.is_empty() && is_assignment(&w) {
+            let (n, v) = w.split_once('=').unwrap_or((&w, ""));
+            assigns.push((n.to_string(), unquote_literal_value(v)));
+            continue;
+        }
+        match unquote_literal_value(&w) {
+            Some(s) => words.push((s, true)),
+            None => words.push((w, false)),
+        }
+    }
+    substitute_resolved(cmd, idx, &mut words);
+    for variant in head_variants(cmd, &words) {
+        classify_command(&assigns, &variant, modes, seen);
+    }
+}
+
+/// One simple command: its prefix-assignment names and `(word, determined)`
+/// argv. Sets [`ShellModes`] flags (fail closed on an undetermined command
+/// word or an undetermined option argument).
+fn classify_command(
+    assigns: &[(String, Option<String>)],
+    words: &[(String, bool)],
+    modes: &mut ShellModes,
+    seen: &mut Seen,
+) {
+    // brush-parser leaves `name[sub]=v` as a command WORD: it is an
+    // assignment (`options[posixbuiltins]=on`, `BASH_ALIASES[echo]=…`).
+    let mut assigns: Vec<(String, Option<String>)> = assigns.to_vec();
+    let mut start = 0;
+    while let Some((w, true)) = words.get(start) {
+        let Some(eq) = w.find('=') else { break };
+        let name = w[..eq].trim_end_matches('+');
+        let base = name.split('[').next().unwrap_or(name);
+        if !(is_shell_identifier(base) && (base == name || name.ends_with(']'))) {
+            break;
+        }
+        assigns.push((name.to_string(), Some(w[eq + 1..].to_string())));
+        start += 1;
+    }
+    let words = &words[start..];
+    for (n, v) in &assigns {
+        note_assignment(n, v.as_deref(), modes, seen);
+    }
+    // Skip the precommand wrappers (`command`, `builtin`, zsh `noglob`,
+    // `nocorrect`, `exec`, `-`) and their options (`command -p trap …`).
+    let mut i = 0;
+    while words.get(i).is_some_and(|(s, det)| {
+        *det && matches!(
+            s.as_str(),
+            "command" | "builtin" | "noglob" | "nocorrect" | "exec" | "-"
+        )
+    }) {
+        i += 1;
+        while words
+            .get(i)
+            .is_some_and(|(s, det)| *det && s.starts_with('-') && s.len() > 1)
+        {
+            i += 1;
+        }
+    }
+    let Some((h, det)) = words.get(i) else {
+        return;
+    };
+    if !det {
+        // The command word is not determined: it may be `alias`, `source`,
+        // anything.
+        modes.alias = true;
+        return;
+    }
+    let h = h.as_str();
+    let args = &words[i + 1..];
+    if matches!(
+        h,
+        "unalias" | "." | "source" | "eval" | "zle" | "autoload" | "functions"
+    ) || is_command_table_name(h)
+        || h.starts_with("TRAP")
+    {
+        modes.alias = true;
+    }
+    if h == "alias" {
+        for (s, det) in args {
+            if !det {
+                modes.alias = true;
+            } else if let Some(eq) = s.find('=') {
+                if !alias_body_is_inert(&s[eq + 1..]) {
+                    modes.alias = true;
+                }
+                modes.literal_alias = true;
+            }
+        }
+    }
+    if h == "trap" {
+        // `trap ACTION SIG…`; a lone operand is a signal to reset; `-l` /
+        // `-p` only list.
+        let sigs: &[(String, bool)] = match args.first() {
+            None => &[],
+            Some((a, _)) if args.len() == 1 && !a.starts_with('-') => args,
+            Some(_) => &args[1..],
+        };
+        // A body that binds nothing is inert whichever signal runs it (as
+        // long as the line defines no function it could call).
+        let body_inert = args.len() > 1
+            && args
+                .first()
+                .is_some_and(|(b, det)| *det && trap_body_binds_nothing(b));
+        if body_inert {
+            modes.literal_alias = true;
+        } else if sigs.iter().any(|(s, det)| !trap_signal_is_inert(s, *det)) {
+            modes.alias = true;
+        }
+    }
+    // Integer attribute: later assignments to these names are arithmetic.
+    if h == "integer"
+        || (matches!(h, "declare" | "typeset" | "local")
+            && args.iter().any(|(s, det)| {
+                *det && s.starts_with('-') && !s.starts_with("--") && s.contains('i')
+            }))
+    {
+        for (s, det) in args {
+            if *det && !s.starts_with('-') {
+                let name = s.split('=').next().unwrap_or(s);
+                seen.int_names.push(name.to_string());
+            } else if !det {
+                modes.alias = true;
+            }
+        }
+    }
+    // Builtins that write the NAMES they are given.
+    if matches!(
+        h,
+        "export"
+            | "declare"
+            | "typeset"
+            | "readonly"
+            | "local"
+            | "integer"
+            | "float"
+            | "read"
+            | "printf"
+            | "mapfile"
+            | "readarray"
+            | "getopts"
+    ) {
+        for (s, det) in args {
+            if *det {
+                let (name, value) = match s.find('=') {
+                    Some(eq) => (&s[..eq], Some(&s[eq + 1..])),
+                    None => (s.as_str(), None),
+                };
+                if is_shell_identifier(name.split('[').next().unwrap_or(name)) {
+                    note_assignment(name, value, modes, seen);
+                }
+            }
+        }
+    }
+    if matches!(h, "set" | "setopt" | "unsetopt" | "shopt" | "emulate") {
+        for (s, det) in args {
+            let lower = s.to_ascii_lowercase().replace('_', "");
+            // zsh `setopt -m PATTERN` / a glob selects options by pattern.
+            let by_pattern = matches!(h, "setopt" | "unsetopt")
+                && ((s.starts_with('-') && s.contains('m')) || s.contains(['*', '?', '[']));
+            if !det
+                || by_pattern
+                || lower.contains("posix")
+                || (h == "emulate" && matches!(s.as_str(), "sh" | "ksh"))
+            {
+                modes.posix = true;
+            }
+        }
+    }
+    if words.iter().any(|(s, det)| *det && s == "--posix") {
+        modes.posix = true;
+    }
 }
 
 /// Names whose assignment redefines what a command word means: zsh's
@@ -979,6 +1713,18 @@ pub(super) fn resolve_expanded_command_word(
     seg_idx: usize,
     word: &str,
 ) -> CommandWordOrigin {
+    resolve_expanded_command_word_with(cmd, seg_idx, word, None)
+}
+
+/// [`resolve_expanded_command_word`] with the line's [`ShellModes`] given:
+/// `None` computes them. [`shell_modes`] itself passes `Some(NONE)` (it is
+/// what is being computed; computing it again would recurse).
+fn resolve_expanded_command_word_with(
+    cmd: &str,
+    seg_idx: usize,
+    word: &str,
+    given_modes: Option<ShellModes>,
+) -> CommandWordOrigin {
     let Some(name) = referenced_variable_name(word) else {
         return CommandWordOrigin::NoReachingAssignment;
     };
@@ -998,10 +1744,10 @@ pub(super) fn resolve_expanded_command_word(
     let mut latest_rebind: Option<usize> = None;
     let mut ties: Vec<(String, String)> = Vec::new();
     let exempt_ok = !exemption_disabled(cmd);
-    // A here-document BODY is data the shell never executes, so a `NAME=value`
-    // typed inside one neither assigns nor rebinds. Skipping it here is what
-    // lets the closed-here-document case above be believed at all: the reason
-    // to distrust the tail was the body, and the body is now identified.
+    let modes = given_modes.unwrap_or_else(|| shell_modes(cmd)); // A here-document BODY is data the shell never executes, so a `NAME=value`
+                                                                 // typed inside one neither assigns nor rebinds. Skipping it here is what
+                                                                 // lets the closed-here-document case above be believed at all: the reason
+                                                                 // to distrust the tail was the body, and the body is now identified.
     let (is_here_doc_body, _) = here_document_layout(&segs);
     for idx in 0..seg_idx {
         if is_here_doc_body.get(idx).copied().unwrap_or(false) {
@@ -1016,14 +1762,14 @@ pub(super) fn resolve_expanded_command_word(
             // a pipeline in the parent shell (`echo x | read P`) and bash
             // may too (`shopt -s lastpipe`), so a stage that may bind the
             // name makes the earlier value stale (backlog f3301770).
-            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok, modes.posix) {
                 latest_rebind = Some(idx);
             }
             continue;
         }
         let words = quote_aware_words(&segs[idx].text);
         if words.is_empty() || !words.iter().all(|w| is_assignment(w)) {
-            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok) {
+            if segment_may_rebind_with(&segs[idx].text, &name, exempt_ok, modes.posix) {
                 latest_rebind = Some(idx);
             }
             continue;
@@ -1048,6 +1794,12 @@ pub(super) fn resolve_expanded_command_word(
     let Some((assign_idx, raw_value)) = latest else {
         return CommandWordOrigin::NoReachingAssignment;
     };
+    if modes.alias {
+        // An alias defined anywhere on the line (before the assignment
+        // too) may give any command word a body that binds this name, so
+        // no assignment is believed (backlog f3301770).
+        return CommandWordOrigin::AssignedButUnknowable;
+    }
     if latest_rebind.map(|r| r > assign_idx).unwrap_or(false) {
         // Something after the winning assignment rebinds the name in a way the
         // scan above cannot read. The assignment is not absent and its text is

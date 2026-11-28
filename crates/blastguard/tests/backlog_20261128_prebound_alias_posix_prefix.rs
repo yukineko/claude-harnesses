@@ -44,11 +44,14 @@ fn assert_never_allow(cases: &[String]) {
             bad.push(format!("main={d:?} sub={h:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "rebind resolved as the confined literal:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "rebind resolved as the confined literal:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
-#[ignore = "RED(2b6fa81e): an alias defined before `P=` whose body binds P still resolves \"$P\" to the stale confined value"]
 fn alias_defined_before_the_binding_whose_body_rebinds_is_never_allow() {
     let w = "echo hi > \"$P\"";
     assert_never_allow(&[
@@ -60,7 +63,6 @@ fn alias_defined_before_the_binding_whose_body_rebinds_is_never_allow() {
 }
 
 #[test]
-#[ignore = "RED(2b6fa81e): under POSIX mode a prefix assignment on a special builtin persists, yet \"$P\" still resolves to the earlier value"]
 fn posix_special_builtin_prefix_assignment_is_never_allow() {
     let w = "echo hi > \"$P\"";
     assert_never_allow(&[
@@ -73,7 +75,6 @@ fn posix_special_builtin_prefix_assignment_is_never_allow() {
 }
 
 #[test]
-#[ignore = "RED(2b6fa81e): a prefix assignment on eval is unmeasured and still resolves \"$P\" to the earlier value"]
 fn unmeasured_prefix_on_eval_is_never_allow() {
     let w = "echo hi > \"$P\"";
     assert_never_allow(&[

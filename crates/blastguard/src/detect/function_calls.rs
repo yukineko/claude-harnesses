@@ -56,6 +56,7 @@ use super::heredoc::here_document_layout;
 use super::segment::{split_segments_with_separators, SeparatedSegment};
 use super::shell_lex::ShellLexed;
 use super::substitution::executed_substitution_payloads;
+use super::vars::{defined_function_names, dequoted_command_head};
 use super::words::is_assignment;
 
 /// How many calls deep one inlining may go (a call inside an inlined body
@@ -93,12 +94,51 @@ pub(super) fn function_call_reading(cmd: &str) -> ShellLexed {
     if !(cmd.contains('(') || cmd.contains("function")) {
         return ShellLexed::Same;
     }
+    if has_unmodelled_call(cmd) {
+        return ShellLexed::Undetermined;
+    }
     let mut defs: HashMap<String, Def> = HashMap::new();
     match inline_calls(cmd, &mut defs, 0) {
         Err(()) => ShellLexed::Undetermined,
         Ok((text, true)) if text != cmd => ShellLexed::Text(text),
         Ok(_) => ShellLexed::Same,
     }
+}
+
+/// True when a command word calls a function defined on the line in a way
+/// this module does not inline: the name is spelt with a quote or a
+/// backslash (`\g`, `'g'`), is `:`, or was defined together with other names
+/// (zsh `x echo () { … }`). The call then runs a body nobody read, so the
+/// reading is undetermined (fail closed), as for every other unmodelled call.
+fn has_unmodelled_call(cmd: &str) -> bool {
+    let segs = split_segments_with_separators(cmd);
+    let (is_body, _) = here_document_layout(&segs);
+    let mut plain: Vec<String> = Vec::new();
+    let mut odd: Vec<String> = Vec::new();
+    for (i, seg) in segs.iter().enumerate() {
+        if is_body.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let names = defined_function_names(&seg.text);
+        let multi = names.len() > 1;
+        for n in names {
+            if multi || n == ":" {
+                odd.push(n);
+            } else {
+                plain.push(n);
+            }
+        }
+    }
+    if plain.is_empty() && odd.is_empty() {
+        return false;
+    }
+    segs.iter().enumerate().any(|(i, seg)| {
+        if is_body.get(i).copied().unwrap_or(false) {
+            return false;
+        }
+        dequoted_command_head(&seg.text)
+            .is_some_and(|(raw, dq)| odd.contains(&dq) || (raw != dq && plain.contains(&dq)))
+    })
 }
 
 /// Byte ranges of `segs` in `text`. Every segment text is a substring of

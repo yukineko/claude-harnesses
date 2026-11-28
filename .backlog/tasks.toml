@@ -709,3 +709,32 @@ exit 101: es/red-detector-r6/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
      Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-3e19a779c1c810c2)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config`"""
+
+[[task]]
+id = "66e7a741"
+title = "blastguard: brace expansion hides destructive git flags — git reset {--hard,HEAD} / git checkout {--,.} Allow (expanded Deny); git clean {-f,-x} / git push {--force,origin} main / git branch {-D,foo} Allow (expanded Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795833978
+updated_at = 1795833978
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag -- --ignored"
+rev = "f76ae4147516af18ad26179d6ce533740a80e388"
+observed_at = 1795833978
+detail = """
+exit 101: red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
+     Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-9a67102d66b409e5)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag`"""

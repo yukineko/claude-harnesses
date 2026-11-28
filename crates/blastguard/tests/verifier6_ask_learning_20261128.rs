@@ -7,10 +7,11 @@
 //! `blastguard shape` prints for a benign sibling, and (where named) a human
 //! rules file via `BLASTGUARD_ASK_RULES`.
 //!
-//! Fixtures live in a fresh `tempfile` directory under
-//! `/private/tmp/claude-askrules`; `<root>/scratchpad` is classed
-//! `s4-scratchpad`; a linked git worktree `<root>/wt` of the main tree
-//! `<root>/repo` is created per test.
+//! Fixtures live in a fresh `tempfile` directory `<root>` =
+//! `/private/tmp/claude-v6-*` (re-anchored 2026-11-28, leader ruling);
+//! `<root>/-proj/<SID>/scratchpad` is classed `s4-scratchpad`; a linked git
+//! worktree `<root>/repo/.claude/worktrees/wt` of the main tree `<root>/repo`
+//! is created per test.
 //!
 //! Each test first checks its preconditions (the probe is NOT Allow without the
 //! table; the sibling Asks; the entry is live for the sibling), so a GREEN
@@ -28,7 +29,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const SID: &str = "5d0c1f0e-aaaa-4bbb-8ccc-0000000000d6";
-const BASE: &str = "/private/tmp/claude-askrules";
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -67,10 +67,11 @@ fn env_home_in_tmp(name: &str) -> Env {
 }
 
 fn env_with(name: &str, home_in_tmp: bool) -> Env {
-    std::fs::create_dir_all(BASE).unwrap();
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    // (root = /private/tmp/claude-<n>, scratchpad = <root>/-proj/<SID>/scratchpad)
     let dir = tempfile::Builder::new()
-        .prefix(&format!("v6-{name}-"))
-        .tempdir_in(BASE)
+        .prefix(&format!("claude-v6-{name}-"))
+        .tempdir_in("/private/tmp")
         .unwrap();
     let root = dir.path().to_path_buf();
     let home_dir = if home_in_tmp {
@@ -92,10 +93,16 @@ fn env_with(name: &str, home_in_tmp: bool) -> Env {
     git(&main, &["init", "-q"]);
     git(&main, &["add", "src"]);
     git(&main, &["commit", "-q", "-m", "i"]);
-    let wt = root.join("wt");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    // (Claude Code's container `<main>/.claude/worktrees`, NOT `.harness-worktrees`:
+    // the latter is a worktree STORAGE root where the rm detector itself Allows
+    // `rm -rf build` (src/detect/rm.rs `worktree_confined`), so the siblings
+    // would no longer Ask.)
+    let wt = main.join(".claude").join("worktrees").join("wt");
+    std::fs::create_dir_all(main.join(".claude").join("worktrees")).unwrap();
     git(&main, &["worktree", "add", "-q", wt.to_str().unwrap()]);
     // fixture re-anchored 2026-11-28 (leader ruling): Scratchpad is the session's own scratchpad only
-    let sp = root.join(SID).join("scratchpad");
+    let sp = root.join("-proj").join(SID).join("scratchpad");
     std::fs::create_dir_all(&sp).unwrap();
     Env {
         _dir: dir,

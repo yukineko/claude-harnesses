@@ -10,8 +10,9 @@
 //! Fixtures: the production layout of round 9 (HOME is an ancestor of the
 //! main tree `<home>/src/repo` and of its linked worktrees
 //! `<home>/src/.harness-worktrees/{wt,wt2}`; the scratchpad is
-//! `<root>/scratchpad`) in a fresh `tempfile` directory under
-//! `/private/tmp/claude-askrules`. `wt2` is ANOTHER session's worktree and
+//! `<root>/-proj/<SID>/scratchpad`) in a fresh `tempfile` directory
+//! `/private/tmp/claude-v10-*` (re-anchored 2026-11-28, leader ruling).
+//! `wt2` is ANOTHER session's worktree and
 //! holds uncommitted work.
 //!
 //! What these tests do NOT prove: that the learner would actually promote the
@@ -27,7 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const SID: &str = "5d0c1f0e-aaaa-4bbb-8ccc-0000000000e0";
-const BASE: &str = "/private/tmp/claude-askrules";
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -56,10 +56,11 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn env_prod(name: &str) -> Env {
-    std::fs::create_dir_all(BASE).unwrap();
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    // (root = /private/tmp/claude-<n>, scratchpad = <root>/-proj/<SID>/scratchpad)
     let dir = tempfile::Builder::new()
-        .prefix(&format!("v10-{name}-"))
-        .tempdir_in(BASE)
+        .prefix(&format!("claude-v10-{name}-"))
+        .tempdir_in("/private/tmp")
         .unwrap();
     let root = dir.path().to_path_buf();
     let home_dir = tempfile::Builder::new()
@@ -80,7 +81,8 @@ fn env_prod(name: &str) -> Env {
     let wt2 = wts.join("wt2");
     git(&main, &["worktree", "add", "-q", wt2.to_str().unwrap()]);
     // fixture re-anchored 2026-11-28 (leader ruling): Scratchpad is the session's own scratchpad only
-    let sp = root.join(SID).join("scratchpad");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    let sp = root.join("-proj").join(SID).join("scratchpad");
     std::fs::create_dir_all(&sp).unwrap();
     Env {
         _dir: dir,
@@ -131,12 +133,8 @@ fn fixtures(e: &Env) {
     }
     // condukt's worktree layout and Claude Code's (inside the main tree): real
     // linked worktrees.
-    let ct = e
-        .home
-        .join(".condukt")
-        .join("worktrees")
-        .join("run")
-        .join("task");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    let ct = e.home.join(".condukt").join("worktrees").join("run-task");
     std::fs::create_dir_all(ct.parent().unwrap()).unwrap();
     git(&e.main, &["worktree", "add", "-q", ct.to_str().unwrap()]);
     std::fs::create_dir_all(ct.join("build")).unwrap();
@@ -599,12 +597,8 @@ fn r10_gitlink_text_containing_worktrees_is_not_a_linked_worktree() {
 fn r10_guard_own_key_allows_stay() {
     let e = env_prod("guard");
     fixtures(&e);
-    let ct = e
-        .home
-        .join(".condukt")
-        .join("worktrees")
-        .join("run")
-        .join("task");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    let ct = e.home.join(".condukt").join("worktrees").join("run-task");
     let w2 = e.main.join(".claude").join("worktrees").join("w2");
     for (cwd, c) in [
         (&e.wt, "git add -A".to_string()),

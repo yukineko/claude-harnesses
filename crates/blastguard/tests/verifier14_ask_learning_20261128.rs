@@ -12,7 +12,8 @@
 //! Fixtures (the production layout): HOME is `<root>/home-*`, the main tree
 //! `<home>/src/harness`, its linked worktree `<home>/src/.harness-worktrees/x`,
 //! the scratchpad `<root>/-proj/<SID>/scratchpad`, all in a fresh `tempfile`
-//! directory under `/private/tmp/claude-askrules`. Harm preconditions are
+//! directory `/private/tmp/claude-v14-*` (re-anchored 2026-11-28, leader
+//! ruling: a `claude-` component directly under `/private/tmp`). Harm preconditions are
 //! observed with real git / real rm.
 //!
 //! What these tests do NOT prove: that the learner would promote the entry
@@ -29,7 +30,6 @@ use std::process::{Command, Stdio};
 
 const SID: &str = "5d0c1f0e-aaaa-4bbb-8ccc-0000000000f4";
 const OTHER: &str = "5d0c1f0e-aaaa-4bbb-8ccc-00000000aaaa";
-const BASE: &str = "/private/tmp/claude-askrules";
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -77,10 +77,11 @@ fn canon(p: &Path) -> PathBuf {
 }
 
 fn env_prod(name: &str) -> Env {
-    std::fs::create_dir_all(BASE).unwrap();
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    // (root = /private/tmp/claude-<n>, scratchpad = <root>/-proj/<SID>/scratchpad)
     let dir = tempfile::Builder::new()
-        .prefix(&format!("v14-{name}-"))
-        .tempdir_in(BASE)
+        .prefix(&format!("claude-v14-{name}-"))
+        .tempdir_in("/private/tmp")
         .unwrap();
     let root = dir.path().to_path_buf();
     let home_dir = tempfile::Builder::new()
@@ -555,10 +556,18 @@ fn r14_fp_production_layout_own_keys_stay_allow() {
 #[test]
 fn r14_fp_linked_worktrees_outside_main_stay_own() {
     let e = env_prod("fpout");
-    let w3 = e.root.join("elsewhere").join("w3");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    // (w3: was `<root>/elsewhere/w3`, now condukt's flat `$HOME/.condukt/worktrees/w3`;
+    // pre: was `<home>/src/harness-wt`, now `<home>/src/.harness-worktrees/harness-wt`,
+    // still a name with the main tree's name as a string prefix)
+    let w3 = e.home.join(".condukt").join("worktrees").join("w3");
     std::fs::create_dir_all(w3.parent().unwrap()).unwrap();
     git(&e.main, &["worktree", "add", "-q", w3.to_str().unwrap()]);
-    let pre = e.home.join("src").join("harness-wt");
+    let pre = e
+        .home
+        .join("src")
+        .join(".harness-worktrees")
+        .join("harness-wt");
     git(&e.main, &["worktree", "add", "-q", pre.to_str().unwrap()]);
     let k = learn(&e, &bash(&e.wt, "git add -A"));
     assert_eq!(class(&k), "s4-worktree", "control: {k}");

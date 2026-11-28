@@ -63,7 +63,9 @@ fn env(name: &str) -> Env {
     // Under the sandbox HOME, NOT the temp dir: /var/folders/... is a
     // SYSTEM_PREFIX, so a repo there classes as `s3-system`.
     let main = home.join("repo");
-    let wt = home.join("wt");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    let wt = home.join(".harness-worktrees").join("wt");
+    std::fs::create_dir_all(home.join(".harness-worktrees")).unwrap();
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&main).unwrap();
     git(&main, &["init", "-q"]);

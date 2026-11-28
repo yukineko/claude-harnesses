@@ -77,7 +77,9 @@ fn learnable() -> (tempfile::TempDir, String) {
     };
     git(&["init", "-q"]);
     git(&["commit", "-q", "--allow-empty", "-m", "i"]);
-    let wt = d.path().join("wt");
+    // fixture re-anchored 2026-11-28 (leader ruling): fixed container / scratchpad positions match the real layout
+    let wt = d.path().join(".harness-worktrees").join("wt");
+    std::fs::create_dir_all(d.path().join(".harness-worktrees")).unwrap();
     git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
     let cwd = wt.to_str().unwrap().to_string();
     (d, cwd)

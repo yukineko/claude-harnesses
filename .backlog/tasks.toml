@@ -757,6 +757,8 @@ notes = ""
 created_at = 1795834020
 updated_at = 1795834020
 weight = 0.0
+issue_number = 2016
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2016"
 rev = 0
 
 [task.repro]

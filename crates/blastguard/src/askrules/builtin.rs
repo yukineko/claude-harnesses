@@ -6,7 +6,8 @@
 //! 1. its class is one of `none`, `worktree`, `scratchpad` (so `home`,
 //!    `undetermined`, `main-tree`, `system`, `protected-config` are not);
 //! 2. every verb's tool is in [`MODELLED_TOOLS`] with a modelled shape of its
-//!    own (a known git subcommand; a pinned program hash for an interpreter);
+//!    own (a known git subcommand; a pinned content hash for a shell script
+//!    file; an interpreter run is never eligible);
 //! 3. no verb contains `?`;
 //! 4. the call is not system harm.
 //!
@@ -27,11 +28,13 @@ pub enum Model {
     /// `git`: only a listed local subcommand; no global option that changes
     /// the repository, the configuration or the helper executables.
     Git,
-    /// An interpreter: the program must be pinned by a `#<hash>` token.
-    Interpreter,
     /// `sh` / `bash`: a script FILE or literal stdin body (hash required);
     /// never `-c` / `-s` / rc-file options.
     ShellFile,
+    /// An interpreter (`python3`, `node`, `perl`, `ruby`): its run is NEVER
+    /// Allow-eligible, whatever program hash the verb carries. The tool is
+    /// listed only so the shape's key is not marked `?` (frozen keys).
+    Interpreter,
 }
 
 /// The single table of tools a shape may be Allowed for.
@@ -47,6 +50,10 @@ pub const MODELLED_TOOLS: &[(&str, Model)] = &[
     ("Edit", Model::Plain),
     ("MultiEdit", Model::Plain),
     ("NotebookEdit", Model::Plain),
+    // Interpreters stay listed so their shape keeps the program hash WITHOUT
+    // the unmodelled-tool `?` (shape keys are frozen), but running a program
+    // is never Allow-eligible (ruling 2026-11-28: no attempt at completeness,
+    // fail closed): see `Model::Interpreter`.
     ("python", Model::Interpreter),
     ("python3", Model::Interpreter),
     ("node", Model::Interpreter),
@@ -116,6 +123,7 @@ fn verb_eligible(v: &Verb) -> bool {
     };
     match model {
         Model::Plain => true,
+        Model::Interpreter => false,
         Model::Git => {
             v.sub
                 .as_deref()
@@ -125,7 +133,6 @@ fn verb_eligible(v: &Verb) -> bool {
                     .iter()
                     .any(|f| GIT_REFUSED_FLAGS.contains(&f.as_str()))
         }
-        Model::Interpreter => v.program.is_some(),
         Model::ShellFile => {
             v.program.is_some()
                 && v.sub.is_none()

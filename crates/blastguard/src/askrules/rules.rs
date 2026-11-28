@@ -11,18 +11,27 @@
 //! file disables ALL Allow rules of THAT file ([`RuleSet::allow_enabled`] is
 //! `false`) and says why in [`RuleSet::warnings`]. A defective rule is skipped;
 //! the other rules of the file are still read, and a deny rule that itself
-//! parses stays active. A file that cannot be parsed at all yields no rule. An
-//! absent file is not an error.
+//! parses stays active.
+//!
+//! What a file would have DENIED is then unknown, so some defects go further
+//! and [`RuleSet::poisons_allow`]: NO Allow (learned ones included) is honoured
+//! next to such a set. That is the case for a file that cannot be read or
+//! parsed (it yields no rule), an unknown top-level key, a restrictive rule
+//! that could not be read, and an override path that does not exist
+//! ([`RuleSet::missing_required`]). An absent bundled file is not an error.
 //!
 //! # Regex
 //!
 //! `*_regex` keys exist only on the restrictive side (`deny`, `not_learnable`,
 //! and `except` entries): a regex is a guess, so it may never create or widen
-//! an Allow. A regex that does not compile counts as MATCHED, as does a
-//! `command_regex` evaluated on facts that carry no command.
+//! an Allow. A regex that does not compile, or whose value is not a string,
+//! counts as MATCHED, as does a `command_regex` evaluated on facts that carry
+//! no command or whose quote-stripped words cannot be determined. A
+//! `command_regex` is searched in the raw text AND in the quote-stripped words.
 
 use super::{Facts, Verb};
 use harness_core::asklearn::{LearnedTable, Verdict};
+use harness_core::verdict::Determination;
 use regex::Regex;
 use std::path::Path;
 
@@ -125,12 +134,27 @@ impl Cond {
             (&self.rule_regex, Some(f.rule.as_str())),
             (&self.class_regex, Some(f.class_label())),
             (&self.verbs_regex, Some(f.verbs_joined.as_str())),
-            (&self.command_regex, f.command.as_deref()),
         ] {
             if let Some(rx) = rx {
                 if !rx.hits(text) {
                     return false;
                 }
+            }
+        }
+        // The command is searched in its raw text AND in the quote-stripped
+        // words the shell passes; either spelling matching is a match, and
+        // words that cannot be determined count as matched.
+        if let Some(rx) = &self.command_regex {
+            let raw = rx.hits(f.command.as_deref());
+            let norm = match &f.command_norm {
+                Some(Determination::Known(n)) => rx.hits(Some(n.as_str())),
+                // The words could not be determined: counts as matched.
+                Some(Determination::Undetermined(_)) => true,
+                // No command text at all: counts as matched.
+                None => true,
+            };
+            if !(raw || norm) {
+                return false;
             }
         }
         true
@@ -208,6 +232,11 @@ pub struct RuleSet {
     not_learnable: Vec<Cond>,
     warnings: Vec<String>,
     allow_enabled: bool,
+    /// A restrictive rule (deny / `not_learnable`) could not be read, the file
+    /// could not be read or parsed, or a required file is absent: what the
+    /// file would have denied is unknown, so NO Allow (learned ones included)
+    /// is honoured while this set is among the judge's sets.
+    poisons_allow: bool,
 }
 
 /// What kind of table is being read.
@@ -226,6 +255,7 @@ impl RuleSet {
             not_learnable: Vec::new(),
             warnings: Vec::new(),
             allow_enabled: true,
+            poisons_allow: false,
         }
     }
 
@@ -233,6 +263,30 @@ impl RuleSet {
     fn defect(&mut self, why: String) {
         self.warnings.push(why);
         self.allow_enabled = false;
+    }
+
+    /// The file's denials are unknown: say why and disable EVERY Allow.
+    fn poison(&mut self, why: String) {
+        self.defect(why);
+        self.poisons_allow = true;
+    }
+
+    /// `true` when no Allow at all may be honoured next to this set (an
+    /// unreadable / unparsable / missing-but-required file, or a restrictive
+    /// rule that could not be read).
+    pub fn poisons_allow(&self) -> bool {
+        self.poisons_allow
+    }
+
+    /// A required file that is absent (the env override names a path that does
+    /// not exist): its denials cannot be known.
+    pub fn missing_required(path: &Path) -> RuleSet {
+        let mut rs = RuleSet::empty();
+        rs.poison(format!(
+            "{}: the rules file named by the override does not exist",
+            path.display()
+        ));
+        rs
     }
 
     /// Why the file was (partly) refused; empty for a clean file.
@@ -249,7 +303,6 @@ impl RuleSet {
     /// exists but cannot be read (a directory, a permission error, not UTF-8)
     /// is a defect: its Allow rules are disabled and the reason is reported.
     pub fn from_file(path: &Path) -> RuleSet {
-        use harness_core::verdict::Determination;
         match harness_core::boundary::read_to_string(path) {
             Determination::Known(Some(text)) => {
                 let mut rs = RuleSet::from_toml(&text);
@@ -261,7 +314,7 @@ impl RuleSet {
             Determination::Known(None) => RuleSet::empty(),
             Determination::Undetermined(why) => {
                 let mut rs = RuleSet::empty();
-                rs.defect(format!(
+                rs.poison(format!(
                     "{}: unreadable rules file ({})",
                     path.display(),
                     why.as_str()
@@ -278,7 +331,7 @@ impl RuleSet {
         let table: toml::Table = match toml::from_str(text) {
             Ok(t) => t,
             Err(e) => {
-                rs.defect(format!(
+                rs.poison(format!(
                     "not parsable as TOML, no rule of this file is usable: {}",
                     e.message()
                 ));
@@ -291,19 +344,30 @@ impl RuleSet {
                 "deny" => Kind::Deny,
                 "not_learnable" => Kind::NotLearnable,
                 other => {
-                    rs.defect(format!("unknown top-level key `{other}`"));
+                    rs.poison(format!("unknown top-level key `{other}`"));
                     continue;
                 }
             };
             let Some(items) = value.as_array() else {
-                rs.defect(format!("`{key}` must be an array of tables ([[{key}]])"));
+                rs.poison(format!("`{key}` must be an array of tables ([[{key}]])"));
                 continue;
             };
             for (i, item) in items.iter().enumerate() {
                 let label = format!("[[{key}]] #{}", i + 1);
                 match rs.parse_item(kind, item) {
                     Ok(()) => {}
-                    Err(why) => rs.defect(format!("{label}: {why}")),
+                    Err(why) => {
+                        // Only a rule that says `decision = "allow"` is known
+                        // to have been permissive; any other unreadable item
+                        // may have been a restriction, so its loss poisons.
+                        let was_allow = kind == Kind::Rule
+                            && item.get("decision").and_then(|d| d.as_str()) == Some("allow");
+                        if was_allow {
+                            rs.defect(format!("{label}: {why}"));
+                        } else {
+                            rs.poison(format!("{label}: {why}"));
+                        }
+                    }
                 }
             }
         }
@@ -544,10 +608,18 @@ fn set_key(
                     "`{key}` is not allowed in an allow `match` (a regex may only restrict)"
                 ));
             }
-            let s = v
-                .as_str()
-                .ok_or_else(|| format!("`{key}` must be a string"))?;
-            let rx = Rx::compile(s, key, warnings);
+            // A regex key of the wrong type is unreadable, like a regex that
+            // does not compile: it counts as matched, the rule is not dropped.
+            let rx = match v.as_str() {
+                Some(s) => Rx::compile(s, key, warnings),
+                None => {
+                    warnings.push(format!(
+                        "`{key}` must be a string (got {}); it counts as matched",
+                        v.type_str()
+                    ));
+                    Rx { re: None }
+                }
+            };
             match key {
                 "rule_regex" => c.rule_regex = Some(rx),
                 "class_regex" => c.class_regex = Some(rx),

@@ -682,6 +682,19 @@ pub fn is_protected_path(path: &str) -> bool {
 /// writing the bundled file. Matched on the [`collapse`]d and the
 /// `..`-resolved spelling of both sides (union = restrictive direction).
 fn is_ask_rules_override(path: &str) -> bool {
+    ask_rules_override_relation(path, false)
+}
+
+/// True when `path` is a proper ANCESTOR directory of the file
+/// `BLASTGUARD_ASK_RULES` points at: removing or renaming it removes the
+/// override file, and a missing override is undetermined (no Allow), which a
+/// self-grant must not be able to cause either. Same spellings as
+/// [`is_ask_rules_override`].
+fn is_ask_rules_override_ancestor(path: &str) -> bool {
+    ask_rules_override_relation(path, true)
+}
+
+fn ask_rules_override_relation(path: &str, ancestor: bool) -> bool {
     let Ok(target) = std::env::var("BLASTGUARD_ASK_RULES") else {
         return false;
     };
@@ -695,8 +708,17 @@ fn is_ask_rules_override(path: &str) -> bool {
     };
     let want = spellings(&target);
     let have = spellings(path);
-    have.iter()
-        .any(|h| !h.is_empty() && want.iter().any(|w| w == h))
+    have.iter().any(|h| {
+        let h = if ancestor { h.trim_end_matches('/') } else { h };
+        !h.is_empty()
+            && want.iter().any(|w| {
+                if ancestor {
+                    w.strip_prefix(h).is_some_and(|rest| rest.starts_with('/'))
+                } else {
+                    w == h
+                }
+            })
+    })
 }
 
 /// True when `path` is, or lies under, a `.github/workflows` directory (GitHub
@@ -817,6 +839,9 @@ fn protected_dir_set() -> &'static Determination<GlobSet> {
 /// Matched against both the collapsed and the `..`-resolved spelling for the
 /// same reason as [`is_protected_path`].
 pub fn holds_protected_paths(path: &str) -> bool {
+    if is_ask_rules_override_ancestor(path) {
+        return true;
+    }
     let set = match protected_dir_set() {
         Determination::Known(set) => set,
         // Same polarity as `is_protected_path`: a list that was never compiled

@@ -89,6 +89,10 @@ pub struct Facts {
     verbs: Vec<Verb>,
     verbs_joined: String,
     command: Option<String>,
+    /// The quote-stripped words of `command` (what the shell passes). Outer
+    /// `None`: no command text. `Undetermined`: the words could not be
+    /// determined, which counts as matched for a `command_regex`.
+    command_norm: Option<harness_core::verdict::Determination<String>>,
 }
 
 impl Facts {
@@ -103,13 +107,22 @@ impl Facts {
             verbs: shape.verbs.iter().map(|v| Verb::parse(v)).collect(),
             verbs_joined: shape.verbs.join(","),
             command: None,
+            command_norm: None,
         }
     }
 
-    /// Attach the raw command text `command_regex` conditions are searched in.
-    /// Without it such a condition counts as matched (restrictive side).
+    /// Attach the raw command text `command_regex` conditions are searched in,
+    /// and the quote-stripped words of it (a condition is met when EITHER
+    /// spelling matches, so `git ad''d` cannot dodge a `git add` regex; words
+    /// that cannot be determined count as matched). Without a command such a
+    /// condition counts as matched (restrictive side).
     pub fn with_command(mut self, command: &str) -> Facts {
         self.command = Some(command.to_string());
+        self.command_norm = Some(if command.trim().is_empty() {
+            harness_core::verdict::Determination::Known(String::new())
+        } else {
+            crate::shape::static_words(command)
+        });
         self
     }
 
@@ -154,6 +167,11 @@ pub fn judge(facts: &Facts, sets: &[&RuleSet]) -> Judgement {
             return Judgement::Deny(reason);
         }
     }
+    // A set whose denials are unknown (unreadable / unparsable / required but
+    // absent file, an unreadable restrictive rule) allows nothing at all.
+    if sets.iter().any(|s| s.poisons_allow()) {
+        return Judgement::NoMatch;
+    }
     if !builtin::allow_eligible(facts) {
         return Judgement::NoMatch;
     }
@@ -174,12 +192,19 @@ pub const RULES_VAR: &str = "BLASTGUARD_ASK_RULES";
 /// The bundled human rules, compiled in.
 pub const BUNDLED_RULES: &str = include_str!("../../rules/ask-rules.toml");
 
-/// The human rule set: the file `BLASTGUARD_ASK_RULES` names (a missing path is
-/// no rules, not an error), else the bundled one. I/O lives here, not in
-/// [`judge`].
+/// The human rule set: the file `BLASTGUARD_ASK_RULES` names, else the bundled
+/// one. A path the override names that does not exist (or cannot be read or
+/// parsed) is undetermined: [`RuleSet::poisons_allow`], so no Allow is
+/// honoured (the Ask stays an Ask). I/O lives here, not in [`judge`].
 pub fn load_human(env_value: Option<&str>) -> RuleSet {
     match env_value.map(str::trim).filter(|p| !p.is_empty()) {
-        Some(path) => RuleSet::from_file(std::path::Path::new(path)),
+        Some(path) => {
+            let p = std::path::Path::new(path);
+            match harness_core::boundary::read_to_string(p) {
+                harness_core::verdict::Determination::Known(None) => RuleSet::missing_required(p),
+                _ => RuleSet::from_file(p),
+            }
+        }
         None => RuleSet::from_toml(BUNDLED_RULES),
     }
 }

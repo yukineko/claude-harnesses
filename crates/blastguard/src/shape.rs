@@ -148,8 +148,62 @@ fn is_claude_settings(path: &str) -> bool {
     parent == ".claude" && base.starts_with("settings") && base.ends_with(".json")
 }
 
-/// Class of one literal path.
+/// Class of one literal path, decided by the path it REALLY is, not by its
+/// spelling: the canonical path of the longest existing prefix (plus the
+/// not-yet-existing remainder) is classed too. System / protected config on
+/// either wins; a class the spelling and the real path disagree on, or a path
+/// whose real location cannot be determined (nothing of it canonicalises), is
+/// `Undetermined` (never Allow-learnable).
 pub fn class_of_path(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
+    let lexical = class_of_path_spelled(raw, ctx);
+    if matches!(
+        lexical,
+        TargetClass::System | TargetClass::ProtectedConfig | TargetClass::Undetermined
+    ) {
+        return lexical;
+    }
+    let Some(abs) = absolute_of(raw, ctx) else {
+        return TargetClass::Undetermined;
+    };
+    let Some(real) = realpath_opt(&abs) else {
+        return TargetClass::Undetermined;
+    };
+    // The session roots are compared against the real path, so they are
+    // canonicalised too (a symlinked `$TMPDIR` / cwd / home is not a mismatch).
+    let canon_tmp = ctx.tmpdir.and_then(realpath_existing);
+    let canon_cwd = ctx.cwd.and_then(realpath_existing);
+    let canon_home = ctx.home.and_then(realpath_existing);
+    let real_ctx = Ctx {
+        tmpdir: canon_tmp.as_deref().or(ctx.tmpdir),
+        cwd: canon_cwd.as_deref().or(ctx.cwd),
+        home: canon_home.as_deref().or(ctx.home),
+        ..*ctx
+    };
+    let physical = class_of_path_spelled(&real, &real_ctx);
+    if matches!(physical, TargetClass::System | TargetClass::ProtectedConfig) {
+        return physical;
+    }
+    if physical == lexical {
+        lexical
+    } else {
+        TargetClass::Undetermined
+    }
+}
+
+/// `p` with every symlink resolved ([`realpath`]), or `None` when no prefix of
+/// it canonicalises.
+fn realpath_opt(p: &str) -> Option<String> {
+    let mut cur = std::path::Path::new(p);
+    loop {
+        if std::fs::canonicalize(cur).is_ok() {
+            return Some(realpath(p));
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// Class of one literal path by its spelling alone.
+fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     let raw = raw.trim();
     if raw.is_empty() || raw.contains(['$', '`', '*', '?', '[', '{', '\n']) {
         return TargetClass::Undetermined;
@@ -319,8 +373,8 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
         tmpdir: canon_tmp.as_deref().or(ctx.tmpdir),
         ..*ctx
     };
-    let lexical = class_of_path(raw, ctx);
-    let physical = class_of_path(&real, &real_ctx);
+    let lexical = class_of_path_spelled(raw, ctx);
+    let physical = class_of_path_spelled(&real, &real_ctx);
     for c in [lexical, physical] {
         if matches!(c, TargetClass::System | TargetClass::ProtectedConfig) {
             return c;
@@ -371,6 +425,12 @@ fn realpath_existing(p: &str) -> Option<String> {
     std::fs::canonicalize(p)
         .ok()
         .and_then(|c| c.to_str().map(str::to_string))
+}
+
+/// The quote-stripped words the shell would pass, joined by spaces
+/// (`Undetermined` when they cannot be determined statically).
+pub fn static_words(command: &str) -> Determination<String> {
+    crate::detect::ast::static_words(command)
 }
 
 /// The evaluator's facts for the Bash command `command`; an undetermined

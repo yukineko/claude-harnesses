@@ -19,6 +19,7 @@ use super::{
 use crate::shape::{Facts, Target};
 use git::{git_index, git_readonly, parse_git, ShellGit};
 use harness_core::asklearn::UNRESOLVED_VERB;
+use harness_core::verdict::Determination;
 use std::collections::{BTreeSet, HashMap};
 
 fn target_of(v: Value) -> Target {
@@ -34,6 +35,39 @@ fn target_of(v: Value) -> Target {
 /// relative `cd` (`cd ..`), so a git write's repository can be named.
 pub(crate) fn shape_facts(command: &str, cwd: Option<&str>) -> Option<Facts> {
     super::with_hook_dir(cwd, || shape_facts_in(command))
+}
+
+/// The words the shell would actually pass, quotes removed, joined by single
+/// spaces (prefix assignments as `K=v` words first), one line per simple
+/// command. `git ad''d -A` is `git add -A`. `Undetermined` when the command
+/// cannot be evaluated or any word has no static value: the caller counts that
+/// as a match (restrictive side).
+pub(crate) fn static_words(command: &str) -> Determination<String> {
+    let Analysis::Known(script) = analyze(command) else {
+        return Determination::undetermined("the command could not be evaluated statically");
+    };
+    let mut lines = Vec::new();
+    for cmd in &script.commands {
+        let mut words: Vec<String> = Vec::new();
+        for (k, w) in &cmd.assignments {
+            match &w.value {
+                Value::Literal(v) => words.push(format!("{k}={v}")),
+                Value::Undetermined(_) => {
+                    return Determination::undetermined("an assignment value is not static")
+                }
+            }
+        }
+        for w in &cmd.argv {
+            match &w.value {
+                Value::Literal(v) => words.push(v.clone()),
+                Value::Undetermined(_) => {
+                    return Determination::undetermined("a command word is not static")
+                }
+            }
+        }
+        lines.push(words.join(" "));
+    }
+    Determination::Known(lines.join("\n"))
 }
 
 fn shape_facts_in(command: &str) -> Option<Facts> {
@@ -55,6 +89,8 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
         written.insert(CONCURRENT.to_string(), None);
     }
     let mut shell = ShellGit::default();
+    // A standalone assignment (`PATH=..; cmd`) was seen earlier on the line.
+    let mut env_assigned = false;
     for cmd in &script.commands {
         let before = facts.targets.len();
         let git_targets = git_index(cmd)
@@ -64,7 +100,7 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
             .iter()
             .any(|t| matches!(t, Target::Undetermined));
         if let Some(first) = cmd.argv.first() {
-            facts.verbs.push(match &first.value {
+            let mut verb = match &first.value {
                 Value::Literal(name) if !name.is_empty() => verb_token(
                     cmd,
                     name.rsplit('/').next().unwrap_or(name),
@@ -72,7 +108,20 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
                     git_undetermined,
                 ),
                 _ => UNRESOLVED_VERB.to_string(),
-            });
+            };
+            // An environment assignment before the command word (`PATH=..`,
+            // `HOME=..`, `EDITOR=..`), or a standalone assignment earlier on
+            // the line, changes what the command runs and is not in the key:
+            // whatever the variable, the shape is never Allow-learnable.
+            if (env_assigned || !cmd.assignments.is_empty())
+                && !verb.split(' ').any(|t| t == UNRESOLVED_VERB)
+            {
+                verb.push(' ');
+                verb.push_str(UNRESOLVED_VERB);
+            }
+            facts.verbs.push(verb);
+        } else if !cmd.assignments.is_empty() {
+            env_assigned = true;
         }
         let heredoc_body = match (&cmd.stdin, cmd.argv.as_slice()) {
             (StdinSource::Literal(b), [cat]) if matches!(&cat.value, Value::Literal(n) if n.rsplit('/').next() == Some("cat")) => {

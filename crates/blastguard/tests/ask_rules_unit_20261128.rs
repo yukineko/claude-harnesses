@@ -168,7 +168,7 @@ fn flags_any_none_and_program() {
 decision = "allow"
 reason = "x"
 [rule.match]
-tool = "python3"
+tool = "bash"
 program = "#26610971178c87de"
 class = ["worktree"]
 
@@ -186,11 +186,11 @@ class = ["worktree"]
     assert!(rs.allow_enabled(), "{:?}", rs.warnings());
     let w = TargetClass::Worktree;
     assert!(is_allow(&judge(
-        &facts(w, &["python3 -c #26610971178c87de"]),
+        &facts(w, &["bash -e #26610971178c87de"]),
         &[&rs]
     )));
     assert!(!is_allow(&judge(
-        &facts(w, &["python3 -c #0000000000000000"]),
+        &facts(w, &["bash -e #0000000000000000"]),
         &[&rs]
     )));
     assert!(is_allow(&judge(&facts(w, &["git branch -d"]), &[&rs])));
@@ -530,9 +530,10 @@ fn only_modelled_tools_and_confirmed_classes_are_allow_eligible() {
     for c in [TargetClass::None, TargetClass::Scratchpad] {
         assert!(is_allow(&judge(&facts(c, &["git add -A"]), &[&g])), "{c:?}");
     }
-    // interpreters need a pinned program hash
+    // an interpreter run is never allow-eligible, pinned program hash or not
+    // (ruling 2026-11-28: fail closed, no attempt at completeness)
     let py = tool_rule("python3");
-    assert!(is_allow(&judge(
+    assert!(!is_allow(&judge(
         &facts(TargetClass::Worktree, &["python3 #26610971178c87de"]),
         &[&py]
     )));

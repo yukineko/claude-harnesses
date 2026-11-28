@@ -926,6 +926,8 @@ notes = "Observed by verifier13 (2026-11-28): rm -rf of a directory inside own w
 created_at = 1795857105
 updated_at = 1795857105
 weight = 0.0
+issue_number = 2030
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2030"
 rev = 0
 
 [task.repro]

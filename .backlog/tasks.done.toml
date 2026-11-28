@@ -99297,3 +99297,374 @@ rev = "18accae2fb98d6febbd2e7490d40f8da7d4ce4c2"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2b6fa81e"
+title = "blastguard fail-open: prebound rebind - alias before binding + POSIX-mode special-builtin prefix assignment (+ eval prefix unmeasured)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804208
+updated_at = 1795858177
+weight = 0.0
+issue_number = 1999
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1999"
+issue_closed_at = 1795858180
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_alias_posix_prefix -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804208
+detail = """
+exit 101: 0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 1m 30s
+     Running tests/backlog_20261128_prebound_alias_posix_prefix.rs (target/release/deps/backlog_20261128_prebound_alias_posix_prefix-2c4a599e19a4ae68)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_alias_posix_prefix`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_prebound_alias_posix_prefix"
+exit = 0
+passed = 3
+rev = "1ca9b06792c4d22034fdf858a6b033de7dc9b26b"
+observed_at = 1795858167
+output_digest = "sha256:57987d59edc1e4dbfdac6c029d7b418645af9688c3e3313c348107265bfdc99a"
+excerpt = """
+
+running 3 tests
+test unmeasured_prefix_on_eval_is_never_allow ... ok
+test alias_defined_before_the_binding_whose_body_rebinds_is_never_allow ... ok
+test posix_special_builtin_prefix_assignment_is_never_allow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+   Compiling blastguard v0.2.1038 (/Users/yuki/src/.harness-worktrees/integ-20261128b/crates/blastguard)
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.09s
+     Running tests/backlog_20261128_prebound_alias_posix_prefix.rs (target/debug/deps/backlog_20261128_prebound_alias_posix_prefix-9fc530b2c1d6276a)
+"""
+
+[task.closure.red]
+rev = "d8de31edf011e6dd0d49aef22bbab62fa30a84bf"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f71994a8"
+title = "blastguard fail-open: prebound rebind - alias spellings, prebound functions, DEBUG/TRAPDEBUG/PS4 hooks, POSIX-enabling spellings"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804328
+updated_at = 1795858182
+weight = 0.0
+issue_number = 2000
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2000"
+issue_closed_at = 1795858185
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round2 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804328
+detail = """
+exit 101:  in 0.62s
+
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 30.47s
+     Running tests/backlog_20261128_prebound_round2.rs (target/release/deps/backlog_20261128_prebound_round2-3f113c28c1a81a79)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round2`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_prebound_round2"
+exit = 0
+passed = 4
+rev = "1ca9b06792c4d22034fdf858a6b033de7dc9b26b"
+observed_at = 1795858180
+output_digest = "sha256:8e5da0f0eb50b4af7c860461e0a16a154d3d472dcc5d784b0e4047ac94874183"
+excerpt = """
+
+running 4 tests
+test measured_alias_spellings_before_the_binding_are_never_allow ... ok
+test measured_prebound_function_and_hooks_are_never_allow ... ok
+test unmeasured_undetermined_definitions_are_never_allow ... ok
+test measured_posix_enabling_spellings_are_never_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1038 (/Users/yuki/src/.harness-worktrees/integ-20261128b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/backlog_20261128_prebound_round2.rs (target/debug/deps/backlog_20261128_prebound_round2-03f16823e77013b4)
+"""
+
+[task.closure.red]
+rev = "e919c9c8ce3085ea52df1398292fa91e294c9295"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "a6603095"
+title = "blastguard fail-open: prebound rebind - POSIXLY_CORRECT variants, function names shadowing builtins, chpwd hooks, PS4 via declare/export/read/printf"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804390
+updated_at = 1795858187
+weight = 0.0
+issue_number = 2001
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2001"
+issue_closed_at = 1795858191
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round3 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804390
+detail = """
+exit 101:  in 2.64s
+
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 48.80s
+     Running tests/backlog_20261128_prebound_round3.rs (target/release/deps/backlog_20261128_prebound_round3-ddf99ebb165cb6c2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round3`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_prebound_round3"
+exit = 0
+passed = 4
+rev = "1ca9b06792c4d22034fdf858a6b033de7dc9b26b"
+observed_at = 1795858185
+output_digest = "sha256:9f2db48d0b8cd430cd36f3c946571c9f4aa020fde8cdd2c212000b651a72b735"
+excerpt = """
+
+running 4 tests
+test measured_posix_and_hook_rebinds_are_never_allow ... ok
+test removed_false_positives_stay_allow ... ok
+test measured_function_named_like_builtin_or_quoted_call_is_never_allow ... ok
+test unmeasured_same_family_rows_are_never_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1038 (/Users/yuki/src/.harness-worktrees/integ-20261128b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/backlog_20261128_prebound_round3.rs (target/debug/deps/backlog_20261128_prebound_round3-cb433933f245c549)
+"""
+
+[task.closure.red]
+rev = "892dcb54f0161ec54b8fd9c2b34c3a1f0c2ebacc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "680e8510"
+title = "blastguard fail-open: prebound rebind - PS4/PS3 prompt and arithmetic recursion ([[ ]], declare -i, (( )), let), precommand modifiers noglob/nocorrect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804472
+updated_at = 1795858193
+weight = 0.0
+issue_number = 2002
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2002"
+issue_closed_at = 1795858195
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round4 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804472
+detail = """
+exit 101: kage cache
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 38.51s
+     Running tests/backlog_20261128_prebound_round4.rs (target/release/deps/backlog_20261128_prebound_round4-df3917b3fe60aba8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round4`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_prebound_round4"
+exit = 0
+passed = 4
+rev = "1ca9b06792c4d22034fdf858a6b033de7dc9b26b"
+observed_at = 1795858191
+output_digest = "sha256:8b68395368b3979232be05cfed8f71aef71848601729214b65c125814123df5b"
+excerpt = """
+
+running 4 tests
+test measured_precommand_modifier_hooks_are_never_allow ... ok
+test unmeasured_same_family_rows_are_never_allow ... ok
+test pending_fp_non_exit_traps_with_inert_bodies_stay_allow ... ok
+test measured_prompt_and_arithmetic_rebinds_are_never_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1038 (/Users/yuki/src/.harness-worktrees/integ-20261128b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_20261128_prebound_round4.rs (target/debug/deps/backlog_20261128_prebound_round4-e8db53e42a30fad1)
+"""
+
+[task.closure.red]
+rev = "5aecc1e4e96c3e03aab5f21e9793039c0e5df489"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "687ece3c"
+title = "blastguard fail-open: nested system harm (bash -c / eval / $(...) tails) is Ask in main after fan-out padding (python -c programs, bash -c fanout, 3200 echo lines)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release).
+fix attempt fp-687ece3c 1e0bef688 rejected by opus verifier 2026-11-28: RED goes GREEN but base Deny weakens to Ask after python3 -c fan-out padding x2 for 9 system-harm shapes (rm -rf /, cd / && rm -rf etc, D=etc; rm -rf /$D), d4 entries 10-17x, 12 commands >10s (max 33.7s). Not merged. Regression guard + remaining gap filed as 5eab530d. Needs a structural fix that keeps padding-independent Deny."""
+created_at = 1795797276
+updated_at = 1795858470
+weight = 0.0
+issue_number = 1998
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1998"
+issue_closed_at = 1795858472
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding -- --ignored"
+rev = "ed0a0752122044844527e1daaea25935ba1bcd94"
+observed_at = 1795797276
+detail = """
+exit 101: rc/.harness-worktrees/session-eaa077f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 30.92s
+     Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/release/deps/backlog_20261128_nested_system_harm_ask_after_padding-df6bdf356a0c6ad4)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding"
+exit = 0
+passed = 2
+rev = "1ca9b06792c4d22034fdf858a6b033de7dc9b26b"
+observed_at = 1795858196
+output_digest = "sha256:4b4071ad5ab42318814ed4feeb82c03adc7c174d7fa5b46476937643ea33df49"
+excerpt = """
+
+running 2 tests
+test control_tails_without_padding_are_deny ... ok
+test nested_system_harm_after_padding_is_deny has been running for over 60 seconds
+test nested_system_harm_after_padding_is_deny ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 272.56s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1038 (/Users/yuki/src/.harness-worktrees/integ-20261128b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/debug/deps/backlog_20261128_nested_system_harm_ask_after_padding-0a62ef7c828a5994)
+"""
+
+[task.closure.red]
+rev = "ed0a0752122044844527e1daaea25935ba1bcd94"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

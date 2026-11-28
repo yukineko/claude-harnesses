@@ -11,15 +11,179 @@
 //! the class `Undetermined` — never `None`, never a placed class.
 //!
 //! Not pure: path classification uses the injected resolver held by
-//! [`SafeRoots`], and [`Target::GitRepo`] reads the `.git` entry of the
-//! repository (real directory = main working tree; gitlink file = linked
-//! worktree only when [`gitlink_kind`] vouches for it, else a main tree or
-//! `Undetermined`; a symlinked `.git` is `Undetermined`); an unreadable one is
-//! `Undetermined`.
+//! [`SafeRoots`]. Which git repository / work tree a directory belongs to is
+//! never guessed from `.git` entries or config text: it is git's own answer
+//! (`git rev-parse --show-toplevel --git-dir --git-common-dir`, [`GitLayout`]),
+//! asked once per directory with a timeout. A failed, timed-out or
+//! unparsable probe, or a hook-process environment that redirects git
+//! ([`git_env_redirected`]), is "not determined": no git class, never Allow.
+//! A git command whose repository lies in a session scratchpad is
+//! `Undetermined` without asking git: never Allow-eligible.
 
 use crate::scope::SafeRoots;
 use harness_core::asklearn::{Shape, TargetClass, UNRESOLVED_VERB};
 use harness_core::verdict::Determination;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Environment variables that make git act on a repository, work tree, index,
+/// object store or configuration other than the one found from the working
+/// directory. If the hook process has any of them (set at all, even empty),
+/// the git class is not determined: the session's Bash tool inherits the same
+/// environment, so what git would really use cannot be read from the cwd.
+pub const GIT_REDIRECT_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
+/// Whether any [`GIT_REDIRECT_ENV`] variable is present, read through `get`
+/// (the process environment in production, a map in tests).
+pub fn git_env_redirected(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    GIT_REDIRECT_ENV.iter().any(|k| get(k).is_some())
+}
+
+/// How long one `git rev-parse` may take before the answer is "not determined".
+const GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What git itself says about the directory it was asked from (all canonical).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitLayout {
+    /// `--show-toplevel`: the work tree git uses.
+    pub toplevel: PathBuf,
+    /// `--git-dir`.
+    pub git_dir: PathBuf,
+    /// `--git-common-dir`.
+    pub common_dir: PathBuf,
+}
+
+impl GitLayout {
+    /// A main working tree: the git dir is the common dir.
+    fn is_main(&self) -> bool {
+        self.git_dir == self.common_dir
+    }
+
+    /// The checkout root of a LINKED worktree, only when git's layout and the
+    /// git dir's own registry agree: the git dir is `<common>/worktrees/<name>`
+    /// and its `gitdir` back-link names `<toplevel>/.git`, a real file. A work
+    /// tree redirected elsewhere (`core.worktree` in `config.worktree`) has a
+    /// toplevel whose `.git` is not that back-link, so it is not a linked root.
+    fn linked_root(&self) -> Option<PathBuf> {
+        if self.is_main() || self.git_dir.parent() != Some(&self.common_dir.join("worktrees")) {
+            return None;
+        }
+        let Determination::Known(Some(back)) =
+            harness_core::boundary::read_to_string(&self.git_dir.join("gitdir"))
+        else {
+            return None;
+        };
+        // A relative back-link (`--relative-paths`) is read against the git dir.
+        let back = std::fs::canonicalize(self.git_dir.join(back.trim())).ok()?;
+        let dot_git = self.toplevel.join(".git");
+        // Unreadable `.git` = not shown to be a linked checkout.
+        let Ok(meta) = std::fs::symlink_metadata(&dot_git) else {
+            return None;
+        };
+        (meta.is_file() && std::fs::canonicalize(&dot_git).ok()? == back)
+            .then(|| self.toplevel.clone())
+    }
+}
+
+/// Per-process memo of git probes (a directory is asked once per hook call).
+#[derive(Debug, Default)]
+pub struct GitCache(RefCell<HashMap<PathBuf, Option<GitLayout>>>);
+
+/// Ask git for the layout of directory `dir`; `None` for every way of not
+/// getting a trustworthy answer (not a directory, spawn failure, timeout,
+/// non-zero exit -- including "not a repository" and a bare repository --,
+/// wrong line count, a path that does not canonicalise).
+fn probe_git(dir: &Path) -> Option<GitLayout> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(dir)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(std::process::Stdio::null())
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ]);
+    let Determination::Known(out) =
+        harness_core::boundary::run_with_timeout(&mut cmd, GIT_PROBE_TIMEOUT)
+    else {
+        return None;
+    };
+    let Determination::Known(stdout) = out.stdout_allowing(&[0]) else {
+        return None;
+    };
+    let lines: Vec<&str> = stdout
+        .strip_suffix('\n')
+        .unwrap_or(&stdout)
+        .split('\n')
+        .collect();
+    let [top, gd, cd] = lines.as_slice() else {
+        return None;
+    };
+    let canon = |s: &str| {
+        let p = Path::new(s);
+        if p.is_absolute() {
+            std::fs::canonicalize(p).ok()
+        } else {
+            None
+        }
+    };
+    Some(GitLayout {
+        toplevel: canon(top)?,
+        git_dir: canon(gd)?,
+        common_dir: canon(cd)?,
+    })
+}
+
+/// The deepest existing directory at or above `p` (what `git -C` can start in).
+fn existing_dir(p: &str) -> Option<PathBuf> {
+    let mut cur = Path::new(p);
+    loop {
+        if cur.is_dir() {
+            return Some(cur.to_path_buf());
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// git's layout for `abs` (its deepest existing directory), memoised; `None`
+/// when the hook environment redirects git or the probe was not determined.
+fn git_layout(abs: &str, ctx: &Ctx<'_>) -> Option<GitLayout> {
+    if ctx.git_env_redirected {
+        return None;
+    }
+    let dir = existing_dir(abs)?;
+    if let Some(hit) = ctx.git.0.borrow().get(&dir) {
+        return hit.clone();
+    }
+    let got = probe_git(&dir);
+    ctx.git.0.borrow_mut().insert(dir, got.clone());
+    got
+}
 
 /// One write target as the evaluator resolved it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +217,10 @@ pub struct Ctx<'a> {
     pub cwd: Option<&'a str>,
     pub tmpdir: Option<&'a str>,
     pub scope: &'a SafeRoots,
+    /// The hook process environment redirects git ([`git_env_redirected`]).
+    pub git_env_redirected: bool,
+    /// Memo of the git probes of this call.
+    pub git: &'a GitCache,
 }
 
 /// Facts for a Bash command whose evaluation failed: the verb is unresolved
@@ -323,7 +491,7 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     // (`.harness-worktrees/`, `~/.condukt/worktrees/<run>`) are not Worktree
     // (they fall to Home / Undetermined below, never Allow-eligible).
     if let Some(root) = cwd_linked_root(ctx) {
-        if strictly_inside_checkout(&norm, &root) {
+        if strictly_inside_checkout(&norm, &root, ctx) {
             return TargetClass::Worktree;
         }
     }
@@ -335,7 +503,7 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     if let Some(c) = ctx.cwd.map(crate::exclude::normalize) {
         if c.starts_with('/')
             && (norm == c || norm.starts_with(&format!("{}/", c.trim_end_matches('/'))))
-            && repo_kind(&realpath(&c)) == RepoKind::Main
+            && git_layout(&realpath(&c), ctx).is_some_and(|l| l.is_main())
         {
             return TargetClass::MainTree;
         }
@@ -348,112 +516,29 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     TargetClass::Undetermined
 }
 
-/// What kind of git working tree a directory lies in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RepoKind {
-    /// `.git` is a directory: git-dir == common-dir (a MAIN working tree).
-    Main,
-    /// `.git` is a gitlink file pointing into `<common>/worktrees/<name>`.
-    Linked,
-    /// No `.git` found, or it could not be read: not determined.
-    Unknown,
-}
-
-/// Walk up from `abs` to the nearest ancestor holding a `.git` entry. A
-/// directory is a main working tree. A file is a gitlink, judged by
-/// [`gitlink_kind`] (git's own `commondir` answer: a linked worktree; a
-/// submodule's `.git/modules/..` is its own main tree). Any read error other
-/// than "absent" is `Unknown`.
-fn repo_kind(abs: &str) -> RepoKind {
-    repo_kind_root(abs).0
-}
-
-/// [`repo_kind`] plus the checkout root (the directory holding `.git`) when
-/// one was found. A path equal to that root is the checkout itself, not
-/// something inside it.
-fn repo_kind_root(abs: &str) -> (RepoKind, Option<std::path::PathBuf>) {
-    let mut cur = std::path::Path::new(abs);
-    loop {
-        let dot_git = cur.join(".git");
-        let root = Some(cur.to_path_buf());
-        match std::fs::symlink_metadata(&dot_git) {
-            Ok(m) if m.is_dir() => return (RepoKind::Main, root),
-            Ok(m) if m.is_file() => return (gitlink_kind(cur, &dot_git), root),
-            Ok(_) => return (RepoKind::Unknown, None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return (RepoKind::Unknown, None),
-        }
-        match cur.parent() {
-            Some(p) => cur = p,
-            None => return (RepoKind::Unknown, None),
-        }
-    }
-}
-
-/// The kind of tree whose `.git` FILE (a gitlink) is `dot_git`, in `root`.
-/// Decided as git decides, never by a substring of the gitlink text: the
-/// `gitdir:` target must exist as a directory. A linked worktree's git dir
-/// holds a `commondir` file that resolves to an existing git dir and a
-/// `gitdir` back-link naming this very `.git` file; a git dir without
-/// `commondir` (a submodule's `.git/modules/..`) is a main tree. A gitlink
-/// that cannot be read or resolved, or whose git dir does not vouch for it, is
-/// `Unknown` (restrictive).
-fn gitlink_kind(root: &std::path::Path, dot_git: &std::path::Path) -> RepoKind {
-    let Determination::Known(Some(text)) = harness_core::boundary::read_to_string(dot_git) else {
-        return RepoKind::Unknown;
-    };
-    let Some(g) = text.trim().strip_prefix("gitdir:") else {
-        return RepoKind::Unknown;
-    };
-    let g = std::path::Path::new(g.trim());
-    let gitdir = match std::fs::canonicalize(root.join(g)) {
-        Ok(p) if p.is_dir() => p,
-        _ => return RepoKind::Unknown,
-    };
-    let common = match harness_core::boundary::read_to_string(&gitdir.join("commondir")) {
-        Determination::Known(None) => return RepoKind::Main,
-        Determination::Known(Some(c)) => c,
-        _ => return RepoKind::Unknown,
-    };
-    match std::fs::canonicalize(gitdir.join(common.trim())) {
-        Ok(p) if p.is_dir() => {}
-        _ => return RepoKind::Unknown,
-    }
-    // The back-link: `<gitdir>/gitdir` names this checkout's `.git` file.
-    let Determination::Known(Some(back)) =
-        harness_core::boundary::read_to_string(&gitdir.join("gitdir"))
-    else {
-        return RepoKind::Unknown;
-    };
-    // git resolves a relative back-link (`--relative-paths`) against the git
-    // dir, never against this process's cwd.
-    let back = gitdir.join(back.trim());
-    match (std::fs::canonicalize(back), std::fs::canonicalize(dot_git)) {
-        (Ok(a), Ok(b)) if a == b => RepoKind::Linked,
-        _ => RepoKind::Unknown,
-    }
-}
-
 /// The checkout root of the linked worktree the session's cwd belongs to, or
-/// `None` when the cwd is not inside a linked worktree (a main tree, no git
-/// tree, an unreadable or unresolvable gitlink, no cwd).
-fn cwd_linked_root(ctx: &Ctx<'_>) -> Option<std::path::PathBuf> {
+/// `None` when git does not say the cwd is inside a linked worktree (a main
+/// tree, no git tree, a redirected work tree, a failed probe, no cwd).
+fn cwd_linked_root(ctx: &Ctx<'_>) -> Option<PathBuf> {
     let c = crate::exclude::normalize(ctx.cwd?);
     if !c.starts_with('/') {
         return None;
     }
-    match repo_kind_root(&realpath(&c)) {
-        (RepoKind::Linked, Some(root)) => Some(root),
-        _ => None,
-    }
+    git_layout(&realpath(&c), ctx)?.linked_root()
 }
 
 /// Whether `abs` lies STRICTLY inside the checkout `root`: below it, not the
-/// root itself, and its own nearest `.git` is that checkout's (a submodule's
-/// or another checkout nested below is a different tree).
-fn strictly_inside_checkout(abs: &str, root: &std::path::Path) -> bool {
-    let p = std::path::Path::new(abs.trim_end_matches('/'));
-    p != root && p.starts_with(root) && repo_kind_root(abs).1.as_deref() == Some(root)
+/// root itself, and git says the directory it is in belongs to that very
+/// linked checkout (a submodule's or another checkout nested below is a
+/// different tree).
+fn strictly_inside_checkout(abs: &str, root: &Path, ctx: &Ctx<'_>) -> bool {
+    let p = Path::new(abs.trim_end_matches('/'));
+    p != root
+        && p.starts_with(root)
+        && git_layout(abs, ctx)
+            .and_then(|l| l.linked_root())
+            .as_deref()
+            == Some(root)
 }
 
 /// The absolute, normalised spelling of `raw` (as [`class_of_path`] reads it),
@@ -485,15 +570,15 @@ fn absolute_of(raw: &str, ctx: &Ctx<'_>) -> Option<String> {
 
 /// Class of the REPOSITORY a git write acts on (spec rule: a git write takes
 /// its class from the tree it modifies, not from `none`). System, protected
-/// config keep their own class. A scratchpad repository is `Scratchpad` only
-/// when `.git` is a real (non-symlink) directory whose config has no
-/// `core.worktree` (or there is no repository); a symlinked `.git`, a
-/// `core.worktree`, an `include`d config or an unreadable config is
-/// `Undetermined`, and a gitlink file is judged by [`gitlink_kind`] like any
-/// other tree. Only the linked worktree the session's cwd belongs to is
+/// config keep their own class. A path that is a session scratchpad both
+/// spelled and really is `Undetermined` WITHOUT asking git (a git command
+/// there is never Allow-eligible: the repository git uses from a scratchpad
+/// may be any other one; `rm` / file tools there stay `Scratchpad`, which
+/// [`class_of_path`] judges from the path alone). Every other tree is git's own answer
+/// ([`GitLayout`]): only the linked worktree the session's cwd belongs to is
 /// `Worktree` (a worktree storage path is not); the main working tree is
-/// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything not shown to be
-/// one of those is `Undetermined`.
+/// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything git did not
+/// answer, or answered as something else, is `Undetermined`.
 pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     let Some(abs) = absolute_of(raw, ctx) else {
         return TargetClass::Undetermined;
@@ -518,107 +603,30 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
         if !real_spelling {
             return TargetClass::Undetermined;
         }
-        // Round 11: the class is the tree git really uses, not the cwd's
-        // spelling. Scratchpad only for no repository at all or a plain one
-        // (`.git` a real directory, no `core.worktree`); a gitlink file falls
-        // through to the git-dir judgement below, anything else is unknown.
-        match scratch_repo_state(&real) {
-            ScratchRepo::NoRepo | ScratchRepo::Plain => return TargetClass::Scratchpad,
-            ScratchRepo::Gitlink => {}
-            ScratchRepo::Unsafe => return TargetClass::Undetermined,
-        }
+        // Round 13: no git class for a scratchpad (what git uses from there
+        // is the repository's own business: hooks, `core.fsmonitor`,
+        // `core.worktree`, a repository above it). `Undetermined` also marks
+        // the verb `?` ([`shape_of`]), so the shape is never Allow-eligible.
+        return TargetClass::Undetermined;
     }
-    // Round 9: the repository's kind is git's answer, never a substring of
-    // the spelling (the `.harness-worktrees/` container is no repository).
-    // Round 10: only the linked worktree the session's cwd belongs to is
-    // `Worktree` (the repository IS that checkout, root included, unlike a path
-    // target); another linked worktree is `Undetermined`.
-    let placed = match repo_kind_root(&real) {
-        (RepoKind::Linked, Some(root)) if cwd_linked_root(ctx).as_deref() == Some(&root) => {
-            TargetClass::Worktree
-        }
-        (RepoKind::Linked, _) => TargetClass::Undetermined,
-        (RepoKind::Main, _) => TargetClass::MainTree,
-        (RepoKind::Unknown, _) => TargetClass::Undetermined,
+    // The repository's kind is git's answer, never a substring of the
+    // spelling (the `.harness-worktrees/` container is no repository). Only
+    // the linked worktree the session's cwd belongs to is `Worktree` (the
+    // repository IS that checkout, root included, unlike a path target);
+    // another linked worktree is `Undetermined`.
+    let placed = match git_layout(&real, ctx) {
+        None => TargetClass::Undetermined,
+        Some(l) if l.is_main() => TargetClass::MainTree,
+        Some(l) => match (l.linked_root(), cwd_linked_root(ctx)) {
+            (Some(root), Some(own)) if root == own => TargetClass::Worktree,
+            _ => TargetClass::Undetermined,
+        },
     };
     // Only the Allow-eligible class needs the spelling to be the real path.
     if placed == TargetClass::Worktree && !real_spelling {
         return TargetClass::Undetermined;
     }
     placed
-}
-
-/// What git would use for a repository found at or above a scratchpad path.
-enum ScratchRepo {
-    /// No `.git` anywhere above (every probe was "absent").
-    NoRepo,
-    /// `.git` is a real directory whose config has no `core.worktree`.
-    Plain,
-    /// `.git` is a gitlink file (judged by [`gitlink_kind`]).
-    Gitlink,
-    /// A symlinked `.git`, a `core.worktree`, an `include`d config, or
-    /// anything unreadable: not shown to be plain (restrictive).
-    Unsafe,
-}
-
-/// Same upward search as [`repo_kind_root`], reporting how git's git dir and
-/// work tree are determined for the nearest `.git`.
-fn scratch_repo_state(abs: &str) -> ScratchRepo {
-    let mut cur = std::path::Path::new(abs);
-    loop {
-        let dot_git = cur.join(".git");
-        match std::fs::symlink_metadata(&dot_git) {
-            Ok(m) if m.is_dir() => {
-                return match git_config_redirects(&dot_git.join("config")) {
-                    Some(false) => ScratchRepo::Plain,
-                    _ => ScratchRepo::Unsafe,
-                };
-            }
-            Ok(m) if m.is_file() => return ScratchRepo::Gitlink,
-            Ok(_) => return ScratchRepo::Unsafe,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return ScratchRepo::Unsafe,
-        }
-        match cur.parent() {
-            Some(p) => cur = p,
-            None => return ScratchRepo::NoRepo,
-        }
-    }
-}
-
-/// Whether the git config at `path` redirects the work tree: `Some(true)` when
-/// a `[core]` section sets `worktree` or any `[include*]` section could, and
-/// `None` when it cannot be read (absent is `Some(false)`).
-fn git_config_redirects(path: &std::path::Path) -> Option<bool> {
-    let text = match harness_core::boundary::read_to_string(path) {
-        Determination::Known(Some(t)) => t,
-        Determination::Known(None) => return Some(false),
-        _ => return None,
-    };
-    let mut section = String::new();
-    for raw in text.lines() {
-        let mut rest = raw.trim();
-        if let Some(inner) = rest.strip_prefix('[') {
-            let end = inner.find(']')?;
-            let head = inner[..end].trim().to_ascii_lowercase();
-            section = head.split_whitespace().next().unwrap_or("").to_string();
-            if section.starts_with("include") {
-                return Some(true);
-            }
-            rest = inner[end + 1..].trim();
-        }
-        if section == "core" {
-            let key = rest
-                .split(['=', ' ', '\t'])
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if key == "worktree" {
-                return Some(true);
-            }
-        }
-    }
-    Some(false)
 }
 
 /// `p` with every symlink resolved: the canonical path of its nearest existing

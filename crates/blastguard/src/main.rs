@@ -421,11 +421,14 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
         let home = std::env::var("HOME").ok();
         let tmpdir = std::env::var("TMPDIR").ok();
         let cwd = input.cwd.trim();
+        let git_cache = blastguard::shape::GitCache::default();
         let ctx = blastguard::shape::Ctx {
             home: home.as_deref(),
             cwd: if cwd.is_empty() { None } else { Some(cwd) },
             tmpdir: tmpdir.as_deref(),
             scope: &scope,
+            git_env_redirected: blastguard::shape::git_env_redirected(|k| std::env::var_os(k)),
+            git: &git_cache,
         };
         let facts = bash_command(input).map(|c| blastguard::shape::bash_facts(&c, ctx.cwd));
         let mut shape = blastguard::shape::shape_of(

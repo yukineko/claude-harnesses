@@ -226,12 +226,10 @@ fn jq_filter_naming_rsync_does_not_relink_literal_redirect_target() {
     let fx = fixture("jq");
     let dir = fx.scratch().to_string_lossy().into_owned();
     let cmds = vec![
-        // The observed shape (1): literal scratch dir via a variable, a loop,
-        // and a jq filter whose STRING holds `rsync` and whose path holds `[0]`.
-        format!(
-            "S={dir}; cd $S && for v in h i; do case $v in h) jq '.tasks[0].title=\"fix rsync\"' in.json;; i) jq '.a=1' in.json;; esac > v$v.json; done"
-        ),
-        // Same, without the variable for the dir.
+        // (The earlier first row, with the assignment-only `S={dir};`, was
+        // re-anchored to not-Allow in
+        // `assignment_only_command_is_never_data_so_jq_rsync_row_is_not_allow`.)
+        // Same shape as the observed one, without the variable for the dir.
         format!(
             "cd {dir} && for v in h i; do case $v in h) jq '.tasks[0].title=\"fix rsync\"' in.json;; i) jq '.a=1' in.json;; esac > v$v.json; done"
         ),
@@ -240,6 +238,34 @@ fn jq_filter_naming_rsync_does_not_relink_literal_redirect_target() {
     ];
     let bad = mismatches(&fx, &cmds, "allow");
     assert!(bad.is_empty(), "expected Allow (FP):\n{}", bad.join("\n"));
+}
+
+/// Backlog 3de4729f, re-anchoring the earlier frozen Allow row (the first row
+/// of `jq_filter_naming_rsync_does_not_relink_literal_redirect_target`, which
+/// required Allow for a line starting with the assignment-only `S={dir};`).
+///
+/// USER RULING 2026-11-22: 「一切データ扱いにしない」 — an assignment-only
+/// command (a simple command that is only variable assignments, no command
+/// word) is never treated as data/harmless (strictest reading). So a line
+/// containing one is not data, the `rsync` word inside the jq filter keeps the
+/// redirect not-Allow, and this exact command must be Ask or Deny.
+///
+/// Does NOT prove: which layer decided (assignment handling, relink logic, or
+/// anything else), whether Ask or Deny is returned (either passes), or that
+/// the same line without `S=` is judged any particular way (the sibling rows
+/// in the Allow test still cover that).
+#[test]
+fn assignment_only_command_is_never_data_so_jq_rsync_row_is_not_allow() {
+    let fx = fixture("jq-assign");
+    let dir = fx.scratch().to_string_lossy().into_owned();
+    let cmd = format!(
+        "S={dir}; cd $S && for v in h i; do case $v in h) jq '.tasks[0].title=\"fix rsync\"' in.json;; i) jq '.a=1' in.json;; esac > v$v.json; done"
+    );
+    let (d, r) = run_main(&fx, &cmd);
+    assert!(
+        d == "ask" || d == "deny",
+        "expected Ask or Deny (assignment-only is never data), got {d} ({r}) for {cmd:?}"
+    );
 }
 
 #[test]

@@ -158,7 +158,6 @@ fn ran(e: &Env, cmd: &str, tuid: &str) {
 
 // test-weakening-justified: new RED for an unfixed defect (2026-11-21).
 #[test]
-#[ignore = "RED(fb4f650d): 2026-11-21 a confirmed bare run of the task's test on a tree makes `tdd red --cmd` there a refused rerun, so no RED proof (and no F->P oracle / verified) is reachable - remove when fixed"]
 fn red_tdd_red_after_bare_run_on_same_tree_is_not_denied() {
     let e = env();
     ran(&e, BARE, "tu-1");

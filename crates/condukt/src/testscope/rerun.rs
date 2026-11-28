@@ -9,7 +9,9 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::{parse_tests, tree_identity, untagged, Decision, Parsed, Words, TDD_RED_ROUTE};
+use super::{
+    parse_tests, tree_identity, untagged, Decision, Parsed, Words, TDD_GREEN_ROUTE, TDD_RED_ROUTE,
+};
 
 /// One rerun-ledger record: the tree a test ran in and the command.
 ///
@@ -320,8 +322,10 @@ const ASK_TAIL: &str = "no PostToolUse / PostToolUseFailure has confirmed that a
 /// this tree is denied, a pending one asks. It records the fully [`untagged`]
 /// bare key, so a later bare run is refused.
 ///
-/// `tdd red --cmd <c>` is checked against the bare key, as a bare run is, and
-/// records both the bare key and its red-tagged key.
+/// `tdd red --cmd <c>` (backlog fb4f650d) is checked against its red-tagged key
+/// and an earlier `tdd green` of `<c>`, not the bare key, so a bare run on the
+/// tree cannot block the RED proof; it records both the bare key and its
+/// red-tagged key.
 pub(super) fn check_rerun(
     by_dir: &[(PathBuf, Vec<Words>)],
     ledger: &Path,
@@ -359,6 +363,19 @@ pub(super) fn check_rerun(
                 keys.push(green_key.clone());
                 keys.push(red_key.clone());
                 rows_keys.push(green_key);
+            } else if red {
+                // backlog fb4f650d (mirror of 8f82f09d): a `tdd red` is checked
+                // only against an earlier `tdd red` of this command, so a bare
+                // run cannot block the RED evidence the F->P oracle requires.
+                // It is still refused after a `tdd green` of it (a red after a
+                // green on one unchanged tree proves nothing), and it records
+                // the bare key below, so a bare run after it is refused.
+                keys.push(red_key.clone());
+                keys.push(key(format!(
+                    "{} {}",
+                    TDD_GREEN_ROUTE.join(" "),
+                    bare.join(" ")
+                )));
             } else {
                 keys.push(bare_key.clone());
             }

@@ -1988,7 +1988,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             if let Some(deny) = git::git_exec_ban_embedded_deny(rest, depth, ctx) {
                 return deny;
             }
-            match git_acc.record(analyze_git(rest, seg, ctx)) {
+            match git_acc.record(analyze_git(rest, seg, &tokens[..idx], ctx)) {
                 Some(deny) => deny,
                 None => git_acc.finish(),
             }

@@ -7,6 +7,7 @@ use super::{
 // Backlog 606a93ab: the other-worktree discard verdict (user ruling
 // 2026-11-20), split out to keep this file under the file-growth limit.
 mod apply;
+pub(in crate::detect) mod argv;
 mod long_opt;
 mod other_worktree;
 use other_worktree::{
@@ -584,10 +585,15 @@ which removes untracked files from the working tree)";
 ///
 /// `seg` is the raw segment `rest` was whitespace-split from, when known; it is
 /// handed to the whole-tree-staging check only (see [`super::git_stage`]).
-pub(super) fn analyze_git(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
+pub(super) fn analyze_git(
+    rest: &[&str],
+    seg: Option<&str>,
+    env: &[&str],
+    ctx: &Ctx<'_>,
+) -> Decision {
     let head_end = git_subcommand_index(rest).map_or(rest.len(), |i| i + 1);
     let head_brace = rest[..head_end].iter().any(|w| has_brace_expansion(w));
-    let verdict = analyze_git_words(rest, seg, ctx);
+    let verdict = analyze_git_words(rest, seg, env, ctx);
     if head_brace && matches!(verdict, Decision::Allow) {
         return Decision::ask(HEAD_BRACE_REASON);
     }
@@ -1166,7 +1172,7 @@ fn config_argv_is_read(args: &[&str]) -> bool {
     }
 }
 
-fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
+fn analyze_git_words(rest: &[&str], seg: Option<&str>, env: &[&str], ctx: &Ctx<'_>) -> Decision {
     // Backlog fb338793: exec-capable shapes never reach the per-subcommand
     // arms (and so never the `_ => Allow` at the end). See `git_exec_ban`.
     if let Some(ban) = git_exec_ban(rest) {
@@ -1221,6 +1227,7 @@ fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decisio
     // everything else.
     let write_verdict = super::fileops::write_targets::git_write_target_verdict(
         ctx,
+        env,
         &rest[..idx],
         &sub,
         &rest[idx + 1..],

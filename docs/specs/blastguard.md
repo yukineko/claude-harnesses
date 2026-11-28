@@ -226,9 +226,21 @@ forge・condukt のスケジューラが再利用）。
   `--separate-git-dir` / `--git-dir=D init`、`git clone SRC D` も対象。ディレクトリを作る/埋める target
   （`format-patch -o`・`worktree add|move`・`--prefix`・`init`・`clone`）は dir 自身が保護 dir / 保護 path を
   含む dir（`~/.claude`）/ system dir でも止める（`dir_block`）。相対 target は process cwd 起点で、
-  動かすのは `-C` だけ（`--work-tree` は cwd を動かさないので無視。実 git で観測）。`touch`/`mkdir` は
+  動かすのは `-C` だけ（`--work-tree` は cwd を動かさないので無視。実 git で観測。例外は
+  `checkout-index`: git が work tree top へ chdir するので `--prefix=REL` は `--work-tree` 起点）。`touch`/`mkdir` は
   `/etc`・`/System` など system dir 下を `cp` と同じ Deny にする（`touch -h` は字面のみ）。
-  **残余**: `git clone URL`（宛先省略）の導出名は判定しない（別 rule の scratch 判定のみ）。
+  **git argv パーサ 1 本化（`detect/git/argv.rs`、backlog 4e7fc8e2 の 10 抜け道）**: 各 subcommand の語は
+  option 表（long 名・short 文字・値の有無）に対して 1 つのパーサが読む — `--` 以降は全て operand、long は完全一致→
+  一意な接頭辞（`long_opt::resolve_long_abbrev`）、`--no-X` は `--X` の否定、`--name=V` / `--name V`、短縮束
+  （`-ko D`）は表で分解し値付き short は残り→次語を値に取る。曖昧・未知の option は undetermined で、その行の
+  path になりうる全語（operand・`--opt=V` の V・short の glued 値）を Ask で判定する（保護/system に当たらなければ
+  Allow）。`git init` は operand 無しなら `-C` 後の cwd 自身が着地点、`GIT_DIR=D git init` は D が着地点（それ以外の
+  subcommand では `GIT_DIR`/`GIT_WORK_TREE` env 前置の値が置ける literal のときだけ landing 判定）。`git clone SRC` は
+  宛先省略なら SRC の basename（`.git`/`.bundle`/末尾 `/` 除去、`--bare`/`--mirror` は `.git` 付き）を cwd 起点で判定、
+  導出名が実行時展開なら cwd 自身を判定する（旧残余「導出名は判定しない」を解消）。`git apply` も同じパーサ。
+  **残余**: `checkout-index --prefix=REL` で `--work-tree` 無しのとき cwd 起点で判定する（git は work tree top 起点なので
+  cwd が work tree の subdir の場合は未検証）。generic の `--output` 走査と `archive -o` は未知 option を読み飛ばす
+  （lenient。target を名指す option は表にあるものだけ）。
 - **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
   他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
   （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。

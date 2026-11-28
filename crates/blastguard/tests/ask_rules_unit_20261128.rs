@@ -530,12 +530,22 @@ fn only_modelled_tools_and_confirmed_classes_are_allow_eligible() {
         &facts(TargetClass::Worktree, &["git add -A"]),
         &[&g]
     )));
-    for v in ["rm -f -r", "mv", "cp", "mkdir"] {
+    for v in ["rm -f -r"] {
         let t = v.split(' ').next().unwrap();
         let rs = tool_rule(t);
         assert!(
             is_allow(&judge(&facts(TargetClass::Worktree, &[v]), &[&rs])),
             "{v} is modelled"
+        );
+    }
+    // Round 9 (askrules target narrowing, user policy "do not aim at
+    // completeness"): destination-writing tools are NOT modelled, so no rule
+    // Allows them, however broad. Expectation inverted, not removed.
+    for v in ["mv", "cp", "mkdir", "touch"] {
+        let rs = tool_rule(v);
+        assert!(
+            !is_allow(&judge(&facts(TargetClass::Worktree, &[v]), &[&rs])),
+            "{v} is not modelled"
         );
     }
     for v in [

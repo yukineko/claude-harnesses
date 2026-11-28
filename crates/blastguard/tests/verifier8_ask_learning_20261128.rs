@@ -243,10 +243,13 @@ fn assert_no_ride(e: &Env, sibling: &Value, probe: &Value) {
     );
     let k = sib["shape"].as_str().unwrap().to_string();
     let t = table_with(e, &k);
+    // Round 9 update (askrules target narrowing: Worktree class is only the
+    // inside of a linked worktree): the sibling is no longer Allow-learnable,
+    // so the control is inverted. It stays Ask even with its own allow entry.
     assert_eq!(
         decide_with(e, &t, sibling),
-        "allow",
-        "control: sibling {:?} with its own allow entry {k}",
+        "ask",
+        "control: sibling {:?} is not Allow-eligible even with its own allow entry {k}",
         show(sibling)
     );
     let after = decide_with(e, &t, probe);

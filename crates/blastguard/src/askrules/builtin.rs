@@ -47,10 +47,11 @@ pub enum Model {
 pub const MODELLED_TOOLS: &[(&str, Model)] = &[
     ("git", Model::Git),
     ("rm", Model::Plain),
-    ("mv", Model::Plain),
-    ("cp", Model::Plain),
-    ("mkdir", Model::Plain),
-    ("touch", Model::Plain),
+    // Round 9 (user ruling: shrink the Allow target, no completeness): `cp`
+    // `mv` `install` `ln` `rsync` `ditto` `mkdir` `touch` are NOT listed. Where
+    // they write depends on the destination's kind (`cp f DIR` writes
+    // `DIR/<f>` through a symlink child; `mkdir` / `touch` have no target
+    // row), so the shape cannot pin it. Unlisted = verb `?` = never Allow.
     // File tools: their shape is the single target path, fully classed.
     ("Write", Model::Plain),
     ("Edit", Model::Plain),

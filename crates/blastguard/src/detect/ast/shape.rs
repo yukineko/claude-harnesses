@@ -147,7 +147,15 @@ fn shape_facts_in(command: &str) -> Option<Facts> {
                             whole.then(|| heredoc_body.clone()).flatten(),
                         );
                     }
-                    facts.targets.push(target_of(v.clone()));
+                    // zsh `>!` / `>>!` / `&>!` / `2>!` is a clobber redirect
+                    // whose target is the NEXT word; brush reads a redirect to
+                    // `!` plus an argument. A target `!` is therefore not the
+                    // real target: undetermined (round 9).
+                    if matches!(v, Value::Literal(p) if p == "!") {
+                        facts.targets.push(Target::Undetermined);
+                    } else {
+                        facts.targets.push(target_of(v.clone()));
+                    }
                 }
             }
         }

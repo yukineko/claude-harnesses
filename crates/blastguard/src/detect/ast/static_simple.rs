@@ -6,9 +6,11 @@
 //!
 //! 1. exactly one simple command (no pipeline, `;`, `&&`, `||`, `&`, `!`,
 //!    `time`, compound command, function definition, subshell, command or
-//!    process substitution, heredoc or here-string), and
-//! 2. made only of static literal words: every word (the command word, the
-//!    arguments and each redirect target) is plain text, `'..'` text or
+//!    process substitution, heredoc or here-string), with NO redirect at all
+//!    (round 9: any redirect on the AST is refused), and the raw text has no
+//!    `< > ! | & ;` outside quotes, and
+//! 2. made only of static literal words: every word (the command word and the
+//!    arguments) is plain text, `'..'` text or
 //!    `".."` text with nothing in it that the shell would expand — no `$`
 //!    expansion, `$'..'`, backquote, `$(..)`, `$((..))`, `~`, brace
 //!    expansion, glob, or backslash escape — and no assignment stands before
@@ -19,10 +21,7 @@
 //! the other half of the gate and lives in `shape::class_of_path`.
 
 use super::parse::{parse, parse_word};
-use brush_parser::ast::{
-    Command, CommandPrefixOrSuffixItem, IoFileRedirectKind, IoFileRedirectTarget, IoRedirect,
-    SeparatorOperator, SimpleCommand, Word,
-};
+use brush_parser::ast::{Command, CommandPrefixOrSuffixItem, SeparatorOperator, SimpleCommand};
 use brush_parser::word::WordPiece;
 
 /// Characters that make UNQUOTED text more than a literal: pathname expansion,
@@ -33,12 +32,13 @@ const UNQUOTED_META: &[char] = &['*', '?', '[', ']', '{', '}', '(', ')', '\\', '
 /// Whether `command` is one simple command whose every word is a static
 /// literal. See the module docs.
 pub(crate) fn is_single_static_command(command: &str) -> bool {
-    // zsh (the Bash tool's shell) reads an unquoted `<->` / `<1-9>` as a
-    // numeric glob where brush reads a redirect. A line with any unquoted
-    // `<` is therefore not a static simple command. (`>` is not refused: a
-    // zsh numeric glob always opens with `<`, and an output redirect with a
-    // static target is an existing, tested Allow shape.)
-    if has_unquoted_lt(command) {
+    // Round 9 narrowing (user ruling: do not aim at completeness, shrink the
+    // Allow target). The line must carry no shell operator character outside
+    // quotes: zsh reads `<->` as a numeric glob, `>!` / `>>!` / `&>!` / `2>!`
+    // as clobber redirects (brush reads `> !` plus an argument), and `|`, `&`,
+    // `;`, `!` are separators / negation. Any such line is not a static simple
+    // command, so a learned or rule Allow never applies to a redirecting line.
+    if has_unquoted_operator(command) {
         return false;
     }
     let Ok(program) = parse(command) else {
@@ -63,12 +63,11 @@ pub(crate) fn is_single_static_command(command: &str) -> bool {
     simple_is_static(simple)
 }
 
-/// Whether the raw line has a `<` outside `'..'` / `".."` (a backslash
-/// outside single quotes hides the next char from this scan, but such a word
-/// is refused by [`is_static_word`] anyway). An unbalanced quote counts as
-/// unquoted from there on only for the purpose of staying restrictive: the
-/// scan simply keeps the quote state to the end.
-fn has_unquoted_lt(s: &str) -> bool {
+/// Whether the raw line has one of `< > ! | & ;` outside `'..'` / `".."` (a
+/// backslash outside single quotes hides the next char from this scan, but
+/// such a word is refused by [`is_static_word`] anyway). An unbalanced quote
+/// keeps the quote state to the end of the line.
+fn has_unquoted_operator(s: &str) -> bool {
     let (mut single, mut double, mut esc) = (false, false, false);
     for c in s.chars() {
         if esc {
@@ -79,7 +78,7 @@ fn has_unquoted_lt(s: &str) -> bool {
             '\\' if !single => esc = true,
             '\'' if !double => single = !single,
             '"' if !single => double = !double,
-            '<' if !single && !double => return true,
+            '<' | '>' | '!' | '|' | '&' | ';' if !single && !double => return true,
             _ => {}
         }
     }
@@ -100,7 +99,8 @@ fn simple_is_static(c: &SimpleCommand) -> bool {
     for item in prefix.chain(suffix) {
         let ok = match item {
             CommandPrefixOrSuffixItem::Word(w) => is_static_word(&w.value),
-            CommandPrefixOrSuffixItem::IoRedirect(r) => redirect_is_static(r),
+            // Any redirect at all: not eligible (round 9).
+            CommandPrefixOrSuffixItem::IoRedirect(_) => false,
             // An assignment prefix / declaration word and a process
             // substitution are never static.
             CommandPrefixOrSuffixItem::AssignmentWord(..)
@@ -111,38 +111,6 @@ fn simple_is_static(c: &SimpleCommand) -> bool {
         }
     }
     true
-}
-
-fn redirect_is_static(r: &IoRedirect) -> bool {
-    match r {
-        IoRedirect::File(_, kind, target) => match (kind, target) {
-            (
-                IoFileRedirectKind::Read
-                | IoFileRedirectKind::Write
-                | IoFileRedirectKind::Append
-                | IoFileRedirectKind::ReadAndWrite
-                | IoFileRedirectKind::Clobber,
-                IoFileRedirectTarget::Filename(w),
-            ) => is_static_word(&w.value),
-            // `2>&1`, `>&-`: a descriptor, never a file.
-            (
-                IoFileRedirectKind::DuplicateInput | IoFileRedirectKind::DuplicateOutput,
-                IoFileRedirectTarget::Fd(_),
-            ) => true,
-            (
-                IoFileRedirectKind::DuplicateInput | IoFileRedirectKind::DuplicateOutput,
-                IoFileRedirectTarget::Duplicate(w),
-            ) => is_static_word(&w.value) && is_fd_word(w),
-            _ => false,
-        },
-        IoRedirect::OutputAndError(w, _) => is_static_word(&w.value),
-        IoRedirect::HereDocument(..) | IoRedirect::HereString(..) => false,
-    }
-}
-
-fn is_fd_word(w: &Word) -> bool {
-    let v = w.value.trim();
-    v == "-" || (!v.is_empty() && v.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Whether the shell word `raw` is a static literal: nothing in it is
@@ -200,9 +168,8 @@ mod tests {
             "git commit -m 'a b'",
             "git commit -m \"a b\"",
             "rm -rf /tmp/x/y",
-            "git log > /tmp/o 2>&1",
             "git add -A # note",
-            "git status;",
+            "git commit -m 'a; b > c!'",
         ] {
             assert!(is_single_static_command(c), "{c}");
         }
@@ -212,6 +179,13 @@ mod tests {
     fn everything_else_is_not() {
         for c in [
             "",
+            "git log > /tmp/o 2>&1",
+            "git add -A > /tmp/o",
+            "git add -A >! /x",
+            "git add -A >>! /x",
+            "git add -A &>! /x",
+            "git add -A 2>! /x",
+            "git status;",
             "git add -A && git status",
             "git add -A; git status",
             "git add -A | cat",

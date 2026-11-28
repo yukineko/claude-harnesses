@@ -396,11 +396,24 @@ fn r7_dangling_symlink_redirect_rides_scratchpad_truncate_allow() {
         std::fs::symlink_metadata(e.sp.join("dangm")).is_ok() && !e.main.join("newfile").exists(),
         "precondition: <sp>/dangm is a dangling link into the main tree"
     );
-    assert_no_ride(
-        &e,
-        None,
-        &bash(&e.sp, &format!("git status > {}/payload", e.sp.display())),
-        &bash(&e.sp, &format!("git status > {}/dangm", e.sp.display())),
+    // Round 9 update (askrules target narrowing, user policy): a line with a
+    // redirect is no longer Allow-eligible, so the control is inverted: the
+    // sibling stays Ask even with its own allow entry, and so does the probe.
+    let sibling = bash(&e.sp, &format!("git status > {}/payload", e.sp.display()));
+    let probe = bash(&e.sp, &format!("git status > {}/dangm", e.sp.display()));
+    let sib = shape_with(&e, None, &sibling);
+    assert_eq!(sib["decision"], "ask", "precondition: sibling Asks: {sib}");
+    let k = sib["shape"].as_str().unwrap().to_string();
+    let t = table_with(&e, &k);
+    assert_eq!(
+        decide_with(&e, &t, None, &sibling),
+        "ask",
+        "a redirecting line is not Allow-eligible even with its own allow entry {k}"
+    );
+    assert_ne!(
+        decide_with(&e, &t, None, &probe),
+        "allow",
+        "probe must not ride the learned key {k}"
     );
 }
 

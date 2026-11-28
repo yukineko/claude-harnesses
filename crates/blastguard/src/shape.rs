@@ -103,12 +103,34 @@ pub fn shape_of(
     ) {
         verbs.push(UNRESOLVED_VERB.to_string());
     }
+    let mut target_class = class_of(&targets, ctx);
+    // Round 9: a destination-writing tool the Allow gate does not model
+    // (`cp` / `mv` / `install` / `ln` / `rsync` / `ditto` / `mkdir` / `touch`)
+    // does not place its write: `cp f DIR` writes `DIR/<f>` through a symlink
+    // child and `mkdir` / `touch` carry no target row. Its class is never an
+    // Allow-eligible one; System / MainTree / ProtectedConfig / Home keep
+    // their own (more restrictive or equal) class.
+    if matches!(
+        target_class,
+        TargetClass::None | TargetClass::Scratchpad | TargetClass::Worktree
+    ) && verbs
+        .iter()
+        .any(|v| UNPLACED_WRITERS.contains(&v.split(' ').next().unwrap_or("")))
+    {
+        target_class = TargetClass::Undetermined;
+    }
     Shape {
         rule_id: rule_id.to_string(),
-        target_class: class_of(&targets, ctx),
+        target_class,
         verbs,
     }
 }
+
+/// Tools whose write destination the shape cannot place (see [`shape_of`]).
+const UNPLACED_WRITERS: &[&str] = &[
+    "cp", "gcp", "mv", "gmv", "install", "ginstall", "ln", "gln", "rsync", "ditto", "mkdir",
+    "touch",
+];
 
 /// The class of a set of targets: the most dangerous one wins
 /// (System > MainTree > ProtectedConfig > Undetermined > Home > Worktree >
@@ -293,12 +315,16 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     if crate::deletion::is_system_path(&norm) || crate::scope::is_inside_system_dir(&norm) {
         return TargetClass::System;
     }
-    if norm.contains("/.condukt/worktrees/") || norm.contains("/.harness-worktrees/") {
+    // Round 9: Worktree is "strictly inside one linked-worktree checkout"
+    // (git's own linked-worktree answer), never a substring of the spelling:
+    // the storage container `.harness-worktrees/` and a checkout's own root
+    // are not inside a checkout.
+    if strictly_inside_linked_checkout(&norm) {
         return TargetClass::Worktree;
     }
     if matches!(
         ctx.scope.classify_worktree(&norm, ctx.cwd),
-        Determination::Known(Placement::Inside { .. } | Placement::IsRoot { .. })
+        Determination::Known(Placement::Inside { .. })
     ) {
         return TargetClass::Worktree;
     }
@@ -312,7 +338,10 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
             && (norm == c || norm.starts_with(&format!("{}/", c.trim_end_matches('/'))))
         {
             match repo_kind(&realpath(&c)) {
-                RepoKind::Linked => return TargetClass::Worktree,
+                RepoKind::Linked if strictly_inside_linked_checkout(&norm) => {
+                    return TargetClass::Worktree
+                }
+                RepoKind::Linked => {}
                 RepoKind::Main => return TargetClass::MainTree,
                 RepoKind::Unknown => {}
             }
@@ -342,13 +371,21 @@ enum RepoKind {
 /// is a linked worktree; anything else (a submodule's `.git/modules/..`) is its
 /// own main tree. Any read error other than "absent" is `Unknown`.
 fn repo_kind(abs: &str) -> RepoKind {
+    repo_kind_root(abs).0
+}
+
+/// [`repo_kind`] plus the checkout root (the directory holding `.git`) when
+/// one was found. A path equal to that root is the checkout itself, not
+/// something inside it.
+fn repo_kind_root(abs: &str) -> (RepoKind, Option<std::path::PathBuf>) {
     let mut cur = std::path::Path::new(abs);
     loop {
         let dot_git = cur.join(".git");
+        let root = Some(cur.to_path_buf());
         match std::fs::symlink_metadata(&dot_git) {
-            Ok(m) if m.is_dir() => return RepoKind::Main,
+            Ok(m) if m.is_dir() => return (RepoKind::Main, root),
             Ok(m) if m.is_file() => {
-                return match harness_core::boundary::read_to_string(&dot_git) {
+                let kind = match harness_core::boundary::read_to_string(&dot_git) {
                     Determination::Known(Some(t)) => match t.trim().strip_prefix("gitdir:") {
                         Some(g) if g.contains("/worktrees/") => RepoKind::Linked,
                         Some(_) => RepoKind::Main,
@@ -356,15 +393,30 @@ fn repo_kind(abs: &str) -> RepoKind {
                     },
                     _ => RepoKind::Unknown,
                 };
+                return (kind, root);
             }
-            Ok(_) => return RepoKind::Unknown,
+            Ok(_) => return (RepoKind::Unknown, None),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return RepoKind::Unknown,
+            Err(_) => return (RepoKind::Unknown, None),
         }
         match cur.parent() {
             Some(p) => cur = p,
-            None => return RepoKind::Unknown,
+            None => return (RepoKind::Unknown, None),
         }
+    }
+}
+
+/// Whether `abs` lies STRICTLY inside a git linked-worktree checkout: its
+/// nearest `.git` is a gitlink into `<common>/worktrees/<name>` and the path
+/// is not that checkout's root. The worktree storage container
+/// (`.harness-worktrees/`, `~/.condukt/worktrees/<run>`) holds no `.git`, so
+/// it is never inside one.
+fn strictly_inside_linked_checkout(abs: &str) -> bool {
+    match repo_kind_root(abs) {
+        (RepoKind::Linked, Some(root)) => {
+            std::path::Path::new(abs.trim_end_matches('/')) != root.as_path()
+        }
+        _ => false,
     }
 }
 
@@ -428,14 +480,12 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
             TargetClass::Undetermined
         };
     }
-    let placed = if real.contains("/.condukt/worktrees/") || real.contains("/.harness-worktrees/") {
-        TargetClass::Worktree
-    } else {
-        match repo_kind(&real) {
-            RepoKind::Linked => TargetClass::Worktree,
-            RepoKind::Main => TargetClass::MainTree,
-            RepoKind::Unknown => TargetClass::Undetermined,
-        }
+    // Round 9: the repository's kind is git's answer, never a substring of
+    // the spelling (the `.harness-worktrees/` container is no repository).
+    let placed = match repo_kind(&real) {
+        RepoKind::Linked => TargetClass::Worktree,
+        RepoKind::Main => TargetClass::MainTree,
+        RepoKind::Unknown => TargetClass::Undetermined,
     };
     // Only the Allow-eligible class needs the spelling to be the real path.
     if placed == TargetClass::Worktree && !real_spelling {

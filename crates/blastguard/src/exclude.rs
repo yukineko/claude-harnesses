@@ -159,6 +159,11 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.claude/plugins/cache/**/bin/**",
     ".claude/plugins/cache/**/hooks/**",
     "**/.claude/plugins/cache/**/hooks/**",
+    // `rules/` holds the deployed human Ask rules (`rules/ask-rules.toml`),
+    // which turn an Ask into an Allow: writing it is a self-grant (leader
+    // ruling 2026-11-28, ask-learning spec (d)). Never Allow.
+    ".claude/plugins/cache/**/rules/**",
+    "**/.claude/plugins/cache/**/rules/**",
     // ---- shell startup files (startup-persistence vector) ----
     // Matched by basename anywhere, so both the literal unexpanded `~/.zshrc`
     // and an absolute `/Users/x/.zshrc` are covered.

@@ -740,3 +740,35 @@ exit 101: (/Users/yuki/src/.harness-worktrees/red-detector-3/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 23.34s
      Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-917395933581b067)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_quoted_force_refspec`"""
+
+[[task]]
+id = "d805f80f"
+title = "blastguard fail-open: rm -rf /etc behind xcrun/watch/caffeinate/arch/chronic/script/unbuffer is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795830717
+updated_at = 1795830717
+weight = 0.0
+issue_number = 2011
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2011"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny -- --ignored"
+rev = "b6cc1720fdb0020b52cd92d1866165a08a3e3b31"
+observed_at = 1795830717
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s
+     Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-f48156f04a86cc88)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny`"""

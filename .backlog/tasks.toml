@@ -740,3 +740,32 @@ exit 101: red-detector-r6/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
      Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-9a67102d66b409e5)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag`"""
+
+[[task]]
+id = "46145358"
+title = "blastguard: system harm via command-position brace — {rm,-rf} /etc and {rm,-rf,/etc} are Ask, expanded rm -rf /etc is Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795834020
+updated_at = 1795834020
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_command_position_system_harm -- --ignored"
+rev = "fd98a55f5dbf54bdfe1bf3c5ee64b76df632c7ce"
+observed_at = 1795834020
+detail = """
+exit 101: tector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.83s
+     Running tests/backlog_20261128_detector_brace_command_position_system_harm.rs (target/debug/deps/backlog_20261128_detector_brace_command_position_system_harm-0c924be79dce96a0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_command_position_system_harm`"""

@@ -76,3 +76,90 @@ Measured basis: ~/.blastguard/blocks/blocks.jsonl — 676 real interactive Asks 
 - Stop hook in overwatch runs `ask-learn` (incremental) with a time budget.
 - Promotions: each new Allow entry appended to `~/.blastguard/learned/promotions.jsonl` (`filed:false`).
 - `overwatch ask-learn file-reds --worktree <linked worktree>`: for each unfiled promotion, writes `crates/blastguard/tests/learned_shape_<8hex>.rs` with an `#[ignore = "RED(learned …)"]` test asserting the sample commands are Allow with `BLASTGUARD_LEARNED_TABLE` pointing at an empty table, then `backlog add --repro-test "cargo test -p blastguard --test learned_shape_<8hex> -- --ignored"` and marks `filed:true`. Refuses on the main working tree.
+
+## Rule files and the judging module (user ruling 2026-11-28, fifth round)
+
+User rulings (verbatim): 「すすめて。たぶんコードだけでまとめるのは集中できなくなるのでよくない。あと万能はめざさず簡単になるとか失敗しつづけるを避けられるなら十分」 and 「すべてをデータにする必要もない。コードをつかうことも間違ってはいない。ただし処理するコードはまとまった形のlibとかにしてほしい」. Goal: make Allow/Deny rules easy to read and change; NOT a universal rule language.
+
+Split: shape EXTRACTION (shell parsing, cwd/env tracking, repo class, hashing: `src/shape.rs` and the detectors) stays code. The JUDGMENT from a shape's facts moves into ONE module, `crates/blastguard/src/askrules/` (`mod.rs` public entry, `rules.rs` TOML schema + matcher, `builtin.rs` the invariants below). It lives in blastguard (not harness-core) because only the blastguard verdict side judges; overwatch (a dependency of blastguard) keeps writing the table through harness-core `asklearn` and never judges. `learned.rs::apply` and the scattered checks (`Shape::allow_permitted`, never-allowed class, `?` handling, deny-beats-allow in `asklearn::lookup`) are routed through this module and removed from their old places. Single entry, pure (no I/O, no env):
+
+```rust
+pub struct Facts { /* rule, class, system_harm, verbs: Vec<Verb{tool, sub, flags, program}> */ }
+impl Facts { pub fn from_shape(shape: &harness_core::asklearn::Shape, system_harm: bool) -> Facts }
+pub struct RuleSet;                                   // parsed rule file; never fails to construct
+impl RuleSet { pub fn from_toml(text: &str) -> RuleSet; pub fn warnings(&self) -> &[String]; pub fn allow_enabled(&self) -> bool }
+pub enum Judgement { Allow(String /*reason*/), Deny(String), NoMatch }
+pub fn judge(facts: &Facts, sets: &[&RuleSet]) -> Judgement
+```
+The learned table (`table.json`) is converted to a `RuleSet` (one exact-shape rule per entry) so there is one matcher. Reading files (env, HOME, stderr) is the binary's job; `judge` only sees values. Only things that get simpler as data are data (the human allow/deny list, the learned table); any complex condition is code inside the module.
+
+### Files
+- Human rules: bundled `crates/blastguard/rules/ask-rules.toml` (compiled in with `include_str!`). Test override: env `BLASTGUARD_ASK_RULES=<path>` replaces it (a missing path = no human rules, not an error).
+- Learned: existing `~/.blastguard/learned/` (`table.json`, `BLASTGUARD_LEARNED_TABLE`).
+
+### Format
+```toml
+[[rule]]
+decision = "allow"            # or "deny"
+reason   = "why (required, non-empty)"
+[rule.match]                  # at least one key; all given keys must hold
+rule       = "git-whole-tree-stage"   # detector rule id
+class      = ["worktree", "scratchpad"] # target class (any of); labels without the `s3-` tag
+tool       = "git"                    # verb basename
+sub        = "add"                    # subcommand
+flags_all  = ["-A"]                   # every listed normalised option present
+flags_any  = ["-f", "--force"]        # at least one present
+flags_none = ["--force"]              # none present
+program    = "#26610971178c87de"      # the `#<fnv1a64>` program hash of the verb
+```
+Only structured facts of the shape; exact string equality; NO regex, NO raw command text. `tool/sub/flags*/program` constrain a verb. A shape with several verbs: a Deny rule matches if ANY verb satisfies it; an Allow rule matches only if EVERY verb satisfies it (narrow for Allow, broad for Deny).
+
+### Evaluation
+1. Invariants (below) first. 2. Any matching deny rule (human or learned) -> Deny. 3. Else any matching allow rule -> Allow. 4. Else `NoMatch` -> the Ask stands. Deny beats allow across files too. A Deny is never produced for a call the detector already denied, and a detector Deny is never downgraded (unchanged).
+
+### Invariants fixed in code (`builtin.rs`; no file can change them)
+- (a) class `system`, `protected-config`, `main-tree` never match an Allow rule; `system_harm` never matches one.
+- (b) a shape whose verbs contain `?` (`UNRESOLVED_VERB`) never matches an Allow rule.
+- (c) an unknown key (top level, `[[rule]]`, or `match`), a wrong type, an unknown `decision`, a missing/empty `reason`, an empty `match`, an unparsable file, or an unreadable existing file disables ALL Allow rules of THAT file (`allow_enabled() == false`; warning in `warnings()`, printed to stderr by the binary with the reason). Deny rules of the file stay active when they themselves parse (rule-by-rule); if the whole file is unparsable no rule is usable. An absent file is not an error.
+- (d) the human rules file path (`crates/blastguard/rules/**`, and the `BLASTGUARD_ASK_RULES` target) is protected config like `.blastguard/learned/**`: Write/Edit/shell writes are never Allow.
+
+### Positive allow-list: only fully modelled shapes can be Allowed (coordinator ruling 2026-11-28, after four failed verifier rounds)
+
+Closing reach holes one wrapper at a time failed four times (r4: `env -C`, `env -S`, `bash -c`, `find -exec`, `./run.sh` through a wrapper, `sh -c ./run.sh`, fish/pwsh files). The invariants (a)(b) above are therefore replaced as the Allow gate by an inverted, positive rule, defined ONCE in `askrules/builtin.rs` (`MODELLED_TOOLS`, one table):
+
+- A shape can match an Allow rule (human or learned) only if ALL hold: (1) its class is one of `none`, `worktree`, `scratchpad` (so `home` and `undetermined` are no longer Allow-eligible either); (2) EVERY verb's tool (first token) is in `MODELLED_TOOLS` with its modelled subcommands: `git` with a known subcommand list, `rm`, `mv`, `cp`, `mkdir`, `touch`, and the pinned-program interpreters (`python3`, `python`, `node`, `bash`/`sh` only as a script FILE, ...) which additionally require a `#<hash>` program in the verb (no `?`); (3) no verb contains `?`; (4) not `system_harm`.
+- Everything else is automatically not Allow-eligible: unknown tools, every wrapper that runs or `cd`s another command (`env`, `sudo`, `timeout`, `nice`, `nohup`, `exec`, `command`, `xargs`, `find -exec`, `sh -c` / `bash -c` bodies) unless the lib models the wrapped command completely (initially: none are), unknown interpreters (`fish`, `pwsh`, ...). A Deny rule may still match them.
+- This is the single place to extend: adding a tool to the table is the only way a new kind of shape becomes Allow-eligible. Invariants (a)(b) stay as redundant checks.
+- Intended to turn the 7 tests of `verifier4_ask_learning_20261128.rs` GREEN; they should be read against this rule.
+
+### "Allow, except ..." and regex on the restrictive side only (user ruling 2026-11-28, verbatim: 「allowだが、これはdenyするを書ければ問題は軽量になる。そこを正規表現までふくめればもっとカバレージできる。問題が複雑になっているとは思うので、コードだけでなんとかするとかはしない方がいい気がするし、それは判断して適用して」)
+
+The positive allow-list stays; fine-grained carve-outs are added as data, not as per-case code.
+
+```toml
+[[rule]]                      # allow, with exceptions
+decision = "allow"
+reason   = "stage in a worktree"
+[rule.match]
+tool = "git"
+sub  = "add"
+except = [                    # each entry: all its keys hold -> this rule does NOT match
+  { command_regex = '\s-f\b' },
+  { class = ["scratchpad"], verbs_regex = 'push' },
+]
+
+[[deny]]                      # top-level deny (same as decision = "deny")
+reason = "wrapper that cd's elsewhere"
+[deny.match]
+command_regex = '\benv\s+-[^ ]*[CS]'
+
+[[not_learnable]]             # the shape/command never matches ANY allow (human or learned); Ask stands; not a Deny
+reason = "inline shell"
+[not_learnable.match]
+command_regex = '\b(ba|z|fi)?sh\s+-c\b'
+```
+- Conditions (`match` of deny / `[[deny]]` / `not_learnable`, and each `except` entry) take the structured keys of the base format plus `rule_regex`, `class_regex`, `verbs_regex` (the joined verbs string `a b,c d`) and `command_regex` (the raw command string; `Facts::with_command(&str)`; the binary passes the Bash command, other tools none). Regex = Rust `regex` crate syntax, UNANCHORED search. `regex` is already a workspace dependency (`Cargo.toml`: `regex = "1"`, in `Cargo.lock`, used by harness-core); blastguard would add `regex = { workspace = true }` -- proposed, to be confirmed at implementation.
+- **No regex on the permissive side.** A `match` of an `allow` rule may not contain any `*_regex`; one that does disables ALL Allow rules of that file (same treatment and stderr warning as invariant (c)). Reason: a regex is a guess, so it may never create or widen an Allow; on the restrictive side a false positive only fails safe.
+- Fail-closed on the restrictive side: a regex that does not compile counts as MATCHED (a broken `except` blocks its allow rule; a broken `not_learnable` blocks allow; a broken `[[deny]]` regex denies, as ruled -- a visible consequence: one typo denies every Ask until fixed), and the reason is printed to stderr. A `command_regex` condition evaluated on `Facts` that carry no command also counts as MATCHED.
+- Evaluation order becomes: invariants + positive allow-list -> `[[deny]]`/deny rules (any file) -> `not_learnable` -> allow rules whose `except` list has no matching entry -> `NoMatch`. Learned-table entries behave as allow/deny rules with no regex.
+- First contents of the bundled `crates/blastguard/rules/ask-rules.toml` (proposal; the reach paths found by verifier rounds r1-r4, as `not_learnable` / `deny` regexes instead of code): `env\s+-[^ ]*[CS]` (env -C / -S), `\bfind\b.*-exec`, `\b(ba|z|fi)?sh\s+-c\b`, `\bpwsh\b`, a wrapper in front of `./run.sh`, and fish/pwsh script files. Each entry carries its reason and the round that found it. The positive allow-list is still the primary defence; these entries are the cheap, visible, editable second layer.

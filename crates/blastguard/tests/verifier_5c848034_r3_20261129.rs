@@ -299,8 +299,8 @@ sys!(sys_cp_home_dotdot: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.
 sys!(sys_cp_home_dotdot_tilde: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt ~/{UP}etc/bg5c84");
 sys!(sys_cp_brace_list: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt {/etc,/etc}/bg5c84");
 sys!(sys_cp_brace_inner: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /{etc,etc}/bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): `cp x /et?/f` is ask while `cp x /etc/f` is deny (glob over a system dir not resolved; base same)"] sys_cp_glob_dir_q: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /et?/bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): `cp x /[e]tc/f` is ask while `cp x /etc/f` is deny (base same)"] sys_cp_glob_dir_class: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /[e]tc/bg5c84");
+sys!(#[ignore = "RED(badf720d): `cp x /et?/f` is ask while `cp x /etc/f` is deny (glob over a system dir not resolved; base same)"] sys_cp_glob_dir_q: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /et?/bg5c84");
+sys!(#[ignore = "RED(badf720d): `cp x /[e]tc/f` is ask while `cp x /etc/f` is deny (base same)"] sys_cp_glob_dir_class: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /[e]tc/bg5c84");
 sys!(sys_cp_private_etc: "", "{R}", "cp {B}/mf/o.txt /etc/bg5c84", "cp {B}/mf/o.txt /private/etc/bg5c84");
 sys!(sys_cp_double_slash: "", "{R}", "cp {B}/mf/o.txt /usr/bin/bg5c84", "cp {B}/mf/o.txt //usr//bin/bg5c84");
 sys!(sys_cp_dot_seg: "", "{R}", "cp {B}/mf/o.txt /usr/bin/bg5c84", "cp {B}/mf/o.txt /usr/./bin/bg5c84");
@@ -312,32 +312,32 @@ sys!(sys_install_ansi_c: "", "{R}", "install {B}/mf/o.txt /usr/bin/bg5c84", "ins
 sys!(sys_cp_system_lib: "", "{R}", "cp {B}/mf/o.txt /System/Library/bg5c84", "cp {B}/mf/o.txt \"/System\"/Library/bg5c84");
 sys!(sys_cp_library_daemons: "", "{R}", "cp {B}/mf/o.txt /Library/LaunchDaemons/bg5c84.plist", "cp {B}/mf/o.txt $'/Library'/LaunchDaemons/bg5c84.plist");
 sys!(sys_cp_bin_backslash: "", "{R}", "cp {B}/mf/o.txt /bin/bg5c84", "cp {B}/mf/o.txt \\/bin/bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): `git --work-tree=$'/etc' rm -f` is ask while unquoted is deny ($'…' not resolved statically; base allow)"] sys_git_wt_ansi_c: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=$'/etc' rm -q -f bg5c84");
+sys!(#[ignore = "RED(badf720d): `git --work-tree=$'/etc' rm -f` is ask while unquoted is deny ($'…' not resolved statically; base allow)"] sys_git_wt_ansi_c: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=$'/etc' rm -q -f bg5c84");
 sys!(sys_git_wt_backslash: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=\\/etc rm -q -f bg5c84");
 sys!(sys_git_wt_spaced_quoted: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree \"/etc\" rm -q -f bg5c84");
 sys!(sys_git_wt_home_dotdot: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git --work-tree=\"$HOME\"/{UP}etc rm -q -f bg5c84");
 sys!(sys_git_c_gitdir_checkout: "", "{R}", "git -C /etc --git-dir={R}/.git checkout -f HEAD -- settings.json", "git -C \"/etc\" --git-dir={R}/.git checkout -f HEAD -- settings.json");
 sys!(sys_git_c_gitdir_ansi_c: "", "{R}", "git -C /etc --git-dir={R}/.git checkout -f HEAD -- settings.json", "git -C $'/etc' --git-dir={R}/.git checkout -f HEAD -- settings.json");
 sys!(sys_git_cd_gitdir_checkout: "", "{R}", "git -C /etc --git-dir={R}/.git checkout -f HEAD -- settings.json", "cd /etc && git --git-dir={R}/.git checkout -f HEAD -- settings.json");
-sys!(#[ignore = "RED(5c848034-r3): `GIT_WORK_TREE=$'/etc' git rm -f` is ask while unquoted is deny (base allow)"] sys_git_env_wt_ansi_c: "", "{R}", "GIT_WORK_TREE=/etc git rm -q -f bg5c84", "GIT_WORK_TREE=$'/etc' git rm -q -f bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): `export GIT_WORK_TREE=/etc; git rm -f x` is ALLOW while the prefix form is deny (exported git env not tracked; base same)"] sys_git_export_wt: "", "{R}", "GIT_WORK_TREE=/etc git rm -q -f bg5c84", "export GIT_WORK_TREE=/etc; git rm -q -f bg5c84");
+sys!(#[ignore = "RED(badf720d): `GIT_WORK_TREE=$'/etc' git rm -f` is ask while unquoted is deny (base allow)"] sys_git_env_wt_ansi_c: "", "{R}", "GIT_WORK_TREE=/etc git rm -q -f bg5c84", "GIT_WORK_TREE=$'/etc' git rm -q -f bg5c84");
+sys!(#[ignore = "RED(badf720d): `export GIT_WORK_TREE=/etc; git rm -f x` is ALLOW while the prefix form is deny (exported git env not tracked; base same)"] sys_git_export_wt: "", "{R}", "GIT_WORK_TREE=/etc git rm -q -f bg5c84", "export GIT_WORK_TREE=/etc; git rm -q -f bg5c84");
 sys!(sys_git_alias_init: "", "{R}", "git init -q /usr/bg5c84", "git -c alias.ii=init ii -q /usr/bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): `-c alias.wa='worktree add' wa -q /usr/x` is ask (\"has no value\") while the plain form is deny (base same)"] sys_git_alias_wt_add: "", "{R}", "git worktree add -q /usr/bg5c84", "git -c alias.wa='worktree add' wa -q /usr/bg5c84");
+sys!(#[ignore = "RED(badf720d): `-c alias.wa='worktree add' wa -q /usr/x` is ask (\"has no value\") while the plain form is deny (base same)"] sys_git_alias_wt_add: "", "{R}", "git worktree add -q /usr/bg5c84", "git -c alias.wa='worktree add' wa -q /usr/bg5c84");
 sys!(sys_git_global_alias_init: "git config --global alias.ii init", "{R}", "git init -q /usr/bg5c84", "git ii -q /usr/bg5c84");
-sys!(#[ignore = "RED(5c848034-r3): alias.ii=init in ~/.config/git/config: `git ii -q /usr/x` is ask while `git init -q /usr/x` is deny (XDG config unread; base allow)"] sys_git_xdg_alias_init: "mkdir -p {H}/.config/git && git config --file {H}/.config/git/config alias.ii init", "{R}", "git init -q /usr/bg5c84", "git ii -q /usr/bg5c84");
+sys!(#[ignore = "RED(badf720d): alias.ii=init in ~/.config/git/config: `git ii -q /usr/x` is ask while `git init -q /usr/x` is deny (XDG config unread; base allow)"] sys_git_xdg_alias_init: "mkdir -p {H}/.config/git && git config --file {H}/.config/git/config alias.ii init", "{R}", "git init -q /usr/bg5c84", "git ii -q /usr/bg5c84");
 sys!(sys_git_alias_rm_wt_etc: "", "{R}", "git --work-tree=/etc rm -q -f bg5c84", "git -c alias.r='rm -q -f' --work-tree=/etc r bg5c84");
 
 // ======================== (2) alias hides a destructive git arm (verdict only, normal repo)
 // The plain spelling's verdict comes from the git arms (detect/git.rs), which
 // see the alias NAME, not the verb (implementer residual).
 sys!(arm_alias_reset_hard: "", "{R}", "git reset -q --hard", "git -c alias.r='reset --hard' r -q");
-sys!(#[ignore = "RED(5c848034-r3): alias.hh='reset --hard' in ~/.gitconfig: `git hh` is ALLOW while `git reset --hard` is deny (stored alias not fed to git arms; base same)"] arm_global_alias_reset_hard: GLOBAL_HH, "{R}", "git reset -q --hard", "git hh -q");
+sys!(#[ignore = "RED(badf720d): alias.hh='reset --hard' in ~/.gitconfig: `git hh` is ALLOW while `git reset --hard` is deny (stored alias not fed to git arms; base same)"] arm_global_alias_reset_hard: GLOBAL_HH, "{R}", "git reset -q --hard", "git hh -q");
 sys!(arm_alias_clean_fdx: "", "{R}", "git clean -fdx", "git -c alias.nuke='clean -fdx' nuke");
 sys!(arm_alias_checkout_f: "", "{R}", "git checkout -f", "git -c alias.cf='checkout -f' cf");
 sys!(arm_alias_stash_clear: "", "{R}", "git stash clear", "git -c alias.sc='stash clear' sc");
 // Not kept: `git stash drop` / `git branch -D feat` — the plain spelling is
 // itself `allow` (observed), so an alias cannot widen it.
-sys!(#[ignore = "RED(5c848034-r3): `-c alias.pf='push --force' pf origin main` is ALLOW while `git push --force origin main` is ask (base same)"] arm_alias_push_force: "", "{R}", "git push --force origin main", "git -c alias.pf='push --force' pf origin main");
+sys!(#[ignore = "RED(badf720d): `-c alias.pf='push --force' pf origin main` is ALLOW while `git push --force origin main` is ask (base same)"] arm_alias_push_force: "", "{R}", "git push --force origin main", "git -c alias.pf='push --force' pf origin main");
 sys!(arm_alias_restore_dot: "", "{R}", "git restore .", "git -c alias.rs=restore rs .");
 
 // ======================== (2) ~/.claude: alias to work-tree-writing verbs
@@ -353,19 +353,19 @@ hole!(h_alias_wt_gitdir: "", "{R}", "git -c alias.r='rm -q -f' --git-dir={R}/.gi
 // stored aliases (config files)
 hole!(h_stored_repo_alias: &format!("{CREPO} && {REPO_HH}"), "{R}", "git -C {C} hh -q");
 hole!(h_stored_global_alias: &format!("{CREPO} && {GLOBAL_HH}"), "{R}", "git -C {C} hh -q");
-hole!(#[ignore = "RED(5c848034-r3): alias in ~/.config/git/config (unread) → `git -C ~/.claude hh` allow, resets ~/.claude (base same)"] h_stored_xdg_alias: &format!("{CREPO} && {XDG_HH}"), "{R}", "git -C {C} hh -q");
-hole!(#[ignore = "RED(5c848034-r3): alias via ~/.gitconfig include.path (unread) → allow, resets ~/.claude (base same)"] h_stored_include_alias: &format!("{CREPO} && {INC_HH}"), "{R}", "git -C {C} hh -q");
-hole!(#[ignore = "RED(5c848034-r3): alias via ~/.gitconfig includeIf.gitdir (unread) → allow, resets ~/.claude (base same)"] h_stored_includeif_alias: &format!("{CREPO} && {INCIF_HH}"), "{R}", "git -C {C} hh -q");
+hole!(#[ignore = "RED(badf720d): alias in ~/.config/git/config (unread) → `git -C ~/.claude hh` allow, resets ~/.claude (base same)"] h_stored_xdg_alias: &format!("{CREPO} && {XDG_HH}"), "{R}", "git -C {C} hh -q");
+hole!(#[ignore = "RED(badf720d): alias via ~/.gitconfig include.path (unread) → allow, resets ~/.claude (base same)"] h_stored_include_alias: &format!("{CREPO} && {INC_HH}"), "{R}", "git -C {C} hh -q");
+hole!(#[ignore = "RED(badf720d): alias via ~/.gitconfig includeIf.gitdir (unread) → allow, resets ~/.claude (base same)"] h_stored_includeif_alias: &format!("{CREPO} && {INCIF_HH}"), "{R}", "git -C {C} hh -q");
 hole!(h_stored_config_global_env: &format!("{CREPO} && git config --file {{B}}/g.cfg alias.hh 'reset --hard'"), "{R}", "GIT_CONFIG_GLOBAL={B}/g.cfg git -C {C} hh -q");
-hole!(#[ignore = "RED(5c848034-r3): `HOME=X git -C ~/.claude hh` reads X/.gitconfig alias (blastguard reads its own $HOME) → allow (base same)"] h_stored_home_prefix: &format!("{CREPO} && mkdir -p {{B}}/h2 && git config --file {{B}}/h2/.gitconfig alias.hh 'reset --hard'"), "{R}", "HOME={B}/h2 git -C {C} hh -q");
+hole!(#[ignore = "RED(badf720d): `HOME=X git -C ~/.claude hh` reads X/.gitconfig alias (blastguard reads its own $HOME) → allow (base same)"] h_stored_home_prefix: &format!("{CREPO} && mkdir -p {{B}}/h2 && git config --file {{B}}/h2/.gitconfig alias.hh 'reset --hard'"), "{R}", "HOME={B}/h2 git -C {C} hh -q");
 hole!(h_env_config_count_alias: CREPO, "{R}", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hh GIT_CONFIG_VALUE_0='reset --hard' git -C {C} hh -q");
 hole!(h_config_env_alias: CREPO, "{R}", "V='reset --hard' git --config-env=alias.hh=V -C {C} hh -q");
-hole!(#[ignore = "RED(5c848034-r3): stored `!` shell alias in ~/.gitconfig → `git pw` allow, writes ~/.claude/settings.json (base same)"] h_stored_bang_alias: BANG_GLOBAL, "{R}", "git pw");
+hole!(#[ignore = "RED(badf720d): stored `!` shell alias in ~/.gitconfig → `git pw` allow, writes ~/.claude/settings.json (base same)"] h_stored_bang_alias: BANG_GLOBAL, "{R}", "git pw");
 hole!(h_stored_alias_wt_rm: "git config --global alias.r 'rm -q -f'", "{R}", "git --work-tree={C} r settings.json");
 
 // ======================== (2) --git-dir / GIT_WORK_TREE / core.worktree combos
-hole!(#[ignore = "RED(5c848034-r3): `export GIT_WORK_TREE=~/.claude; git --git-dir=R rm -f` allow, removes ~/.claude file (base same)"] h_export_wt_gitdir: "", "{R}", "export GIT_WORK_TREE={C}; git --git-dir={R}/.git rm -q -f settings.json");
-hole!(#[ignore = "RED(5c848034-r3): `export GIT_WORK_TREE=~/.claude && git rm -f` allow, removes ~/.claude file (base same)"] h_export_wt_plain: "", "{R}", "export GIT_WORK_TREE={C} && git rm -q -f settings.json");
+hole!(#[ignore = "RED(badf720d): `export GIT_WORK_TREE=~/.claude; git --git-dir=R rm -f` allow, removes ~/.claude file (base same)"] h_export_wt_gitdir: "", "{R}", "export GIT_WORK_TREE={C}; git --git-dir={R}/.git rm -q -f settings.json");
+hole!(#[ignore = "RED(badf720d): `export GIT_WORK_TREE=~/.claude && git rm -f` allow, removes ~/.claude file (base same)"] h_export_wt_plain: "", "{R}", "export GIT_WORK_TREE={C} && git rm -q -f settings.json");
 hole!(h_env_cmd_wt: "", "{R}", "env GIT_WORK_TREE={C} git rm -q -f settings.json");
 hole!(h_env_both: "", "{B}", "GIT_DIR={R}/.git GIT_WORK_TREE={C} git rm -q -f settings.json");
 hole!(h_export_gitdir_cd: "", "{R}", "export GIT_DIR={R}/.git; cd {C} && git checkout -f HEAD -- settings.json");
@@ -374,7 +374,7 @@ hole!(h_gitdir_env_cd_home: "", "{R}", "cd {H} && GIT_DIR={R}/.git git checkout 
 hole!(h_gitdir_c_tilde_home: "", "{R}", "git -C ~ --git-dir={R}/.git checkout -f HEAD -- .claude/settings.json");
 hole!(h_gitdir_c_ansi_c: "", "{R}", "git -C $'{C}' --git-dir={R}/.git checkout -f HEAD -- settings.json");
 hole!(h_gitdir_c_hooks_checkout_all: "", "{R}", "git -C {K} --git-dir={R}/.git checkout -f HEAD -- .");
-hole!(#[ignore = "RED(5c848034-r3): core.worktree=~/.claude stored in repo config → plain `git rm -f settings.json` allow, removes ~/.claude file (base same)"] h_core_worktree_stored: "git -C {R} config core.worktree {C}", "{R}", "git rm -q -f settings.json");
+hole!(#[ignore = "RED(badf720d): core.worktree=~/.claude stored in repo config → plain `git rm -f settings.json` allow, removes ~/.claude file (base same)"] h_core_worktree_stored: "git -C {R} config core.worktree {C}", "{R}", "git rm -q -f settings.json");
 hole!(h_core_worktree_stored_gitdir: "git -C {R} config core.worktree {C}", "{B}", "git --git-dir={R}/.git rm -q -f settings.json");
 hole!(h_core_worktree_bare_dot: "mkdir -p {B}/dw/.claude && echo pwn > {B}/dw/.claude/settings.json && git init -q --bare {B}/dot.git && git --git-dir={B}/dot.git --work-tree={B}/dw add . && git --git-dir={B}/dot.git --work-tree={B}/dw commit -qm i && git --git-dir={B}/dot.git config core.bare false && git --git-dir={B}/dot.git config core.worktree {H}", "{B}", "git --git-dir={B}/dot.git checkout -f");
 
@@ -451,4 +451,4 @@ fp!(fp_cp_ansi_c_wt: "", "{W}", "cp src/lib.rs $'sub/new.rs'");
 fp!(fp_commit_ansi_c_msg: "", "{W}", "git commit -q --allow-empty -m $'subj\\n\\nbody'");
 fp!(fp_tee_quoted_wt: "", "{W}", "echo x | tee 'sub/t.log'");
 fp!(fp_mv_quoted_wt: "", "{W}", "mv \"sub/f\" 'sub/g'");
-fp!(#[ignore = "RED(5c848034-r3): FP `cp src/lib.rs sub/{a,b}.rs` in own worktree is ask (brace expansion not resolved; base same, pre-existing)"] fp_cp_brace_wt: "", "{W}", "cp src/lib.rs sub/{a,b}.rs");
+fp!(#[ignore = "RED(badf720d): FP `cp src/lib.rs sub/{a,b}.rs` in own worktree is ask (brace expansion not resolved; base same, pre-existing)"] fp_cp_brace_wt: "", "{W}", "cp src/lib.rs sub/{a,b}.rs");

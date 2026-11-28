@@ -980,9 +980,7 @@ pub(super) fn redirect_targets(seg: &str) -> Vec<String> {
             // `>&<filename>` (the `&>` mirror): the `&` immediately follows `>`.
             // Step over it so we read the FILENAME target, not an empty token.
             // (`>&<digit>` fd DUPs were already skipped above via `fd_dup_amp`.)
-            if bytes.get(j) == Some(&b'&') {
-                j += 1;
-            }
+            j += words::operator_modifier_len(bytes, j);
             j = skip_redirect_word_gap(bytes, j);
             let start = j;
             j = redirect_word_end(bytes, start);
@@ -1042,7 +1040,10 @@ pub(super) fn append_redirect_targets(seg: &str) -> Vec<String> {
         if c == b'>' && !in_s && !in_d && bytes.get(i + 1) == Some(&b'>') {
             // Same target-token scan as `redirect_targets`: ASCII-only
             // delimiters, so `seg[start..j]` never splits a multi-byte char.
-            let start = skip_redirect_word_gap(bytes, i + 2);
+            let start = skip_redirect_word_gap(
+                bytes,
+                i + 2 + words::operator_modifier_len(bytes, i + 2),
+            );
             let j = redirect_word_end(bytes, start);
             let mut j = j;
             if start < j {

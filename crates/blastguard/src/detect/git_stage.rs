@@ -327,6 +327,14 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
                 i += 1;
             }
             c => {
+                // `src>log` is the word `src` and the redirect `>log`; only a
+                // digit-only prefix (`2>`) is the operator's own fd number.
+                if (c == '>' || c == '<')
+                    && !w.redirect
+                    && !w.text.chars().all(|d| d.is_ascii_digit())
+                {
+                    out.push(std::mem::take(&mut w));
+                }
                 w.redirect |= c == '>' || c == '<';
                 w.text.push(c);
                 i += 1;

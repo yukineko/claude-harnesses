@@ -1710,6 +1710,11 @@ forge・condukt のスケジューラが再利用）。
   (3) scratchpad の `rm -rf build 2>&1` / `> log` が redirect 語を operand（path）と数えて Deny だった。
   `detect` の rm dispatch は redirect 語を取り除いた語列を `analyze_rm` に渡す（redirect 先自体は redirect 規則が判定する）。
   語列の quote を追えない形（`\` 、backtick、`$(`、quote 文字を含む語）では取り除かず従来どおりに読む。
+  追記（独立検証者の RED 3 件）: (a) append スキャナも `>>` 直後の `&` / `|`（`>>&` `>>|` `>>&!`）を
+  演算子の一部として読み飛ばし（`operator_modifier_len`、truncating 側と共通）、(b) rm は zsh 読みと
+  bash 読み（`>! x` は `> !` ＋ operand `x`）の両方を判定して厳しい方を採り（`judge_readings`）、
+  (c) git_stage は語の途中の unquoted `>` / `<` を「語の前半＋redirect」に分割して読む
+  （`git add src>log` は `git add src` と同じ判定。数字だけの前置は fd 番号）。
   `words::is_bare_redirect_op` も `>!` 系を「次の語を持つ」演算子として扱う。
 
 ## 安定 rule id（overwatch 署名の粒度確保）

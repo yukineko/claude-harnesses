@@ -1965,7 +1965,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // and routing it back through `analyze_find` restores the multi-exec
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], seg, depth, ctx),
-        "rm" => analyze_rm(&redirect::words::strip_redirect_words(rest), ctx), // 0e79c339
+        "rm" => redirect::words::judge_readings(rest, |r| analyze_rm(r, ctx)), // 0e79c339
         "rsync" => rm::analyze_rsync_delete(rest, ctx),
         "gh" => analyze_gh(rest),
         // 12ba5845: granting autonomy is human-only. `tokens[..idx]` carries the

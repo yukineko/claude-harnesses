@@ -367,7 +367,6 @@ fn v_rm_system_and_protected_with_redirect_stay_deny() {
 /// zsh append/clobber spellings the scanners do not read: `>&!`, `>>&`,
 /// `>>&!`, `>>|`. Each is observed to write the following path first.
 #[test]
-#[ignore = "RED observed 2026-11-28: zsh `>>&` / `>>&!` / `>>|` to protected config is Allow"]
 fn red_zsh_amp_and_bar_append_forms_to_protected_are_not_allow() {
     let e = env("ampforms");
     for op in [">&!", ">>&", ">>&!", ">>|"] {
@@ -430,7 +429,6 @@ fn v_rm_glued_redirect_operand_stays_deny() {
 /// word, so the bash operand is no longer judged. Under zsh the same line
 /// only fails to open the directory `~/.claude` for writing.
 #[test]
-#[ignore = "RED observed 2026-11-28: `rm -rf build >! ~/.claude` is Ask (0.2.1012: Deny); D3 drops the bash operand"]
 fn red_rm_bash_reading_of_bang_operand_stays_deny() {
     let e = env("rmbashbang");
     // Precondition (observed): bash deletes the word after `>!`.
@@ -464,7 +462,6 @@ fn red_rm_bash_reading_of_bang_operand_stays_deny() {
 /// `log` (observed in zsh: the file `log` is created, `src>log` is no
 /// pathspec). 0.2.1012 judged it Allow like `git add src`; the fix Asks.
 #[test]
-#[ignore = "RED observed 2026-11-28: `git add src>log` is Ask while `git add src` is Allow"]
 fn red_git_add_glued_redirect_matches_plain() {
     let e = env("addglued");
     let zdir = e.root.join("zsh-addglued");

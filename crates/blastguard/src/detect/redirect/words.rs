@@ -38,7 +38,28 @@ pub(in crate::detect) fn redirect_word_shape(tok: &str) -> Option<bool> {
 /// is open across words — `rest` is a whitespace split, so a quoted `>` may
 /// stand as a word of its own) the list is returned unchanged: the previous
 /// reading, never a word dropped from a string.
-pub(in crate::detect) fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    strip_reading(rest, false)
+}
+
+/// Judge `rest` under every reading of its redirections and keep the
+/// strictest verdict. The zsh reading ([`strip_redirect_words`]) takes the
+/// word after `>!` as the target; bash reads `>! x` as `> !` plus the
+/// operand `x`, so that reading keeps `x` as an operand. Both are judged
+/// (backlog ffa05737 / 0e79c339: `rm -rf build >! ~/.claude` is Deny).
+pub(in crate::detect) fn judge_readings(
+    rest: &[&str],
+    judge: impl Fn(&[&str]) -> crate::model::Decision,
+) -> crate::model::Decision {
+    let zsh = judge(&strip_reading(rest, false));
+    let bash = strip_reading(rest, true);
+    if bash == strip_reading(rest, false) {
+        return zsh;
+    }
+    super::super::git_apply_patch::stronger(zsh, judge(&bash))
+}
+
+fn strip_reading<'a>(rest: &[&'a str], bash_bang: bool) -> Vec<&'a str> {
     if rest
         .iter()
         .any(|t| t.contains(['\\', '`', '\'', '"']) || t.contains("$("))
@@ -52,11 +73,27 @@ pub(in crate::detect) fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a s
             continue;
         }
         match redirect_word_shape(t) {
+            // bash: the `!` is the target, the next word an ordinary operand.
+            Some(true) if bash_bang && t.ends_with('!') => {}
             Some(owns_next) => skip_next = owns_next,
             None => out.push(*t),
         }
     }
     out
+}
+
+/// Length of the zsh operator modifiers (`&`, then `|`) glued to a `>` / `>>`
+/// at `bytes[j..]` (`>&`, `>>&`, `>|`, `>>|`, `&>|`); `!` is a word of its
+/// own for [`clobber_bang_target`].
+pub(in crate::detect) fn operator_modifier_len(bytes: &[u8], j: usize) -> usize {
+    let mut n = 0;
+    if bytes.get(j) == Some(&b'&') {
+        n += 1;
+    }
+    if bytes.get(j + n) == Some(&b'|') {
+        n += 1;
+    }
+    n
 }
 
 /// zsh's clobber redirect `>!` / `>>!` / `2>!` / `&>!` (and `>!file`) reaches

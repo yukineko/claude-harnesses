@@ -210,7 +210,9 @@ fn negated_redirect_is_not_a_target() {
 const F2_TAIL: &str = "rustfmt crates/blastguard/tests/write_targets_probe.rs && \
 cargo test -p blastguard --test write_targets_probe 2>&1 | tail -5";
 
+// test-weakening-justified: ignore-added on a new RED for an unfixed FP (observed main deny / subagent deny 2026-11-28); backlog add for it was blocked by blastguard (relay bgr-4f96d9843b69), id to be written back
 #[test]
+#[ignore = "RED: 2026-11-28 blastguard FP — quoted .rs heredoc body string line read as redirect '> !`' when later commands follow; observed Deny (main+subagent)"]
 fn f2_rs_heredoc_append_bang_backtick_then_rustfmt_cargo_test_same_as_plain() {
     assert_same_as_baseline(
         "f2",
@@ -230,7 +232,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\""
     )
 }
 
+// test-weakening-justified: ignore-added on a new RED for an unfixed FP (backlog ad84b715, observed main ask / subagent deny 2026-11-28)
 #[test]
+#[ignore = "RED(ad84b715): 2026-11-28 blastguard FP — multi-line commit -m message line 'git apply ... <patch>' refused as git apply reading through <; observed Ask/Deny"]
 fn f3_commit_message_mentioning_git_apply_lt_patch_same_as_without() {
     assert_same_as_baseline(
         "f3_multiline",

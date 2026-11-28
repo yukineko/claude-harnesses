@@ -808,3 +808,34 @@ exit 101:  in 0.63s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
      Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-336490f42eff98a9)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "5c848034"
+title = "blastguard detector: 5 more write/delete shapes reach ~/.claude after fix-write-targets (generic git subcommands, alias init, global --work-tree checkout-index/reset, git apply from ancestor of ~/.claude, partially quoted relative rm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Independent verifier r2 of fix-write-targets (043e51270, crates/blastguard/tests/verifier_fix_write_targets_r2_20261128.rs, 5 ignored REDs; each shape observed writing/deleting with real git/rm under a fake HOME). (1) write_targets.rs generic fall-through only scans --output: git merge-file <protected> / mailsplit -o<dir> / fast-export --export-marks= / credential-store --file=; (2) git -c alias.i=init i <protected>; (3) git --work-tree=~/.claude checkout-index -f -- f (no -a) and --work-tree reset --hard; (4) git apply run in $HOME (an ancestor of ~/.claude) with a patch naming .claude/settings.json; (5) rm "settings".json / settings'.json' / "settings.json"'' with cwd ~/.claude (strip_plain_quotes handles only whole-word quotes). Structural direction: unknown git subcommands with path-looking operands under a protected root -> Ask; alias resolution; quote removal via the shell word parser."""
+created_at = 1795851090
+updated_at = 1795851090
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier_fix_write_targets_r2_20261128 hole_ -- --ignored"
+rev = "b854a46ff1cf1bcdd8c02192ce42ac0e06d43f13"
+observed_at = 1795851090
+detail = """
+exit 101: )]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.46s
+     Running tests/verifier_fix_write_targets_r2_20261128.rs (target/debug/deps/verifier_fix_write_targets_r2_20261128-ac688b738aeda4eb)
+error: test failed, to rerun pass `-p blastguard --test verifier_fix_write_targets_r2_20261128`"""

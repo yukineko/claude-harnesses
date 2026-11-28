@@ -22,7 +22,8 @@ fn verdict(cmd: &str, subagent: bool) -> String {
         .stderr(Stdio::piped())
         .env_remove("CLAUDE_CODE_SESSION_ID");
     if !subagent {
-        hook.env("CLAUDECODE", "1").env("CLAUDE_CODE_ENTRYPOINT", "cli");
+        hook.env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_ENTRYPOINT", "cli");
     }
     let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "hook must always exit 0");
@@ -56,7 +57,6 @@ fn control_plain_push_stays_allow() {
 }
 
 #[test]
-#[ignore = "RED(76dd7aea): git push deleting remote main is Allow while force push is Ask/Deny"]
 fn delete_remote_main_is_ask_or_deny_in_main_mode() {
     let bad: Vec<String> = DELETE_MAIN
         .iter()
@@ -67,7 +67,6 @@ fn delete_remote_main_is_ask_or_deny_in_main_mode() {
 }
 
 #[test]
-#[ignore = "RED(76dd7aea): git push deleting remote main is Allow while force push is Ask/Deny"]
 fn delete_remote_main_is_deny_in_subagent_mode() {
     let bad: Vec<String> = DELETE_MAIN
         .iter()
@@ -91,6 +90,10 @@ fn measure_table() {
         "git push --force origin main",
         "git push --force origin feature",
     ] {
-        println!("TABLE main={} sub={} :: {c}", verdict(c, false), verdict(c, true));
+        println!(
+            "TABLE main={} sub={} :: {c}",
+            verdict(c, false),
+            verdict(c, true)
+        );
     }
 }

@@ -11,6 +11,7 @@ pub(super) mod new_layer;
 mod operand_words;
 mod prefix_inert;
 pub(super) use operand_words::has_unquoted_glob;
+pub(super) use operand_words::{expand_braces_in_word, BraceWord};
 use operand_words::{
     expand_operand_with, place_literal, rm_operand_words, OperandSpelling, Placed, VarLookup,
 };

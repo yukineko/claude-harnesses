@@ -4264,7 +4264,6 @@ fn deletion_escape_spellings_are_not_allowed() {
         format!("rm -rf {}/a -x", f.tmp),
         format!("rm -rf -- {}/a", f.tmp),
         format!("rm -rf - {}/a", f.tmp),
-        format!("rm -rf {}/a 2>/dev/null", f.tmp),
         // Quoting does not launder an escape: these quoted targets do NOT
         // statically resolve inside the temp root (symlink out, `..` above
         // it), so they stay not-Allow exactly like their unquoted spellings.
@@ -4288,6 +4287,7 @@ fn deletion_escape_spellings_are_not_allowed() {
     let plain = verdict_name(&f.run(&format!("rm -rf {}/a", f.tmp)));
     assert_eq!(plain, "allow", "baseline: the plain spelling is Allow");
     for cmd in [
+        format!("rm -rf {}/a 2>/dev/null", f.tmp), // ruling 2026-11-28: a redirect keeps the verdict
         format!("rm -rf {}/a/../a", f.tmp),
         format!("rm -rf {}/./a", f.tmp),
     ] {
@@ -4594,14 +4594,12 @@ const DP: &str = "/home/yuki/proj";
 fn del_facts(status: &[(&str, &str)], tracked: usize) -> crate::reversible::TreeGitFacts {
     crate::reversible::TreeGitFacts {
         toplevel: DP.to_string(),
-        status: status
-            .iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect(),
+        status: status.iter().map(|&(a, b)| (a.into(), b.into())).collect(),
         tracked,
         submodule: false,
         hidden_index_state: false,
         build_dirs: Vec::new(),
+        shared_main_tree: Determination::known(false),
     }
 }
 

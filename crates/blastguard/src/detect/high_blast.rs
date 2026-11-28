@@ -1,6 +1,6 @@
 use super::{
-    compound_views, git_subcommand_index, has_glob_meta, has_short, is_short_flag,
-    normalized_command, upload_flag_operand, Decision, VerdictAcc,
+    compound_views, first_shell_word, git_subcommand_index, has_glob_meta, has_short,
+    is_short_flag, normalized_command, upload_flag_operand, Decision, VerdictAcc,
 };
 
 /// The CONSERVATIVE "high-blast Ask tier": novel, high-blast-radius /
@@ -41,20 +41,39 @@ pub(super) fn analyze_high_blast_tier(cmd: &str) -> Decision {
     for view in compound_views(cmd) {
         // Quoted option words read as their unquoted twins (`'--force'` is
         // `--force`); an undetermined one is asked about by the segment pass.
-        let raw: Vec<&str> = view.command.split_whitespace().collect();
+        // The shell brace-expands before it runs (`git push {--force,origin}`).
+        let command = match super::brace_words::expanded_text(&view.command) {
+            Ok(c) => c,
+            Err(()) => {
+                if let Some(deny) = acc.record(super::brace_words::too_many_ask()) {
+                    return deny;
+                }
+                continue;
+            }
+        };
+        let raw: Vec<&str> = command.split_whitespace().collect();
         let option_words = super::option_words::OptionWords::new(&raw);
         let tokens = option_words.tokens();
         if tokens.is_empty() {
             continue;
         }
-        let head = normalized_command(tokens[0]);
-        let rest = &tokens[1..];
-        let verdict = match head.as_str() {
-            "git" => high_blast_git_force_push(rest),
-            "curl" | "wget" => high_blast_schemeless_upload(&head, rest),
-            _ => None,
-        };
-        if let Some(d) = verdict {
+        // Every candidate command word: a wrapper (`env`/`command`/`timeout 5`/
+        // `nice`/`sudo` ...) puts the real command behind it (backlog e21d3035).
+        let mut verdicts: Vec<Decision> = Vec::new();
+        for idx in super::words::command_candidates(&tokens) {
+            let Some(word) = tokens.get(idx) else {
+                continue;
+            };
+            let head = normalized_command(word);
+            let rest = &tokens[idx + 1..];
+            let v = match head.as_str() {
+                "git" => high_blast_git_force_push(rest),
+                "curl" | "wget" => high_blast_schemeless_upload(&head, rest),
+                _ => None,
+            };
+            verdicts.extend(v);
+        }
+        for d in verdicts {
             if let Some(deny) = acc.record(d) {
                 return deny;
             }
@@ -102,6 +121,20 @@ fn high_blast_git_force_push(rest: &[&str]) -> Option<Decision> {
 already on the remote — this rewrites shared history",
         ));
     }
+    // Remote-branch deletion is irreversible and no weaker than a force push:
+    // `--delete`, `-d` (also bundled short flags), or an empty-source refspec
+    // (`:branch`, `:refs/heads/branch`).
+    let deletes = tail.iter().any(|t| *t == "--delete")
+        || has_short(tail, 'd')
+        || tail
+            .iter()
+            .any(|t| !t.starts_with('-') && t.starts_with(':'));
+    if deletes {
+        return Some(Decision::ask(
+            "`git push` that deletes a remote branch/ref (--delete, -d, or a `:ref` refspec) \
+is irreversible for everyone sharing the remote",
+        ));
+    }
     if let Some(refspec) = tail.iter().find(|t| refspec_source_is_force(t)) {
         return Some(Decision::ask(format!(
             "`git push` refspec `{refspec}` has a leading `+` on its source side, which forces \
@@ -130,7 +163,18 @@ fn refspec_source_is_force(tok: &str) -> bool {
     if tok.starts_with('-') {
         return false;
     }
-    let source = tok.split(':').next().unwrap_or(tok);
+    // Judge the value the shell hands to git: `"+x"`, `'+x'` and `\+x` all
+    // arrive as `+x` (backlog 005d3a94). A word whose unquoting cannot be
+    // determined is read raw AND is treated as forcing when it merely
+    // contains a `+` at a possible word start (fail closed).
+    let value = match first_shell_word(tok) {
+        Some(v) => v,
+        None => return tok.contains('+'),
+    };
+    if value.starts_with('-') {
+        return false;
+    }
+    let source = value.split(':').next().unwrap_or(&value);
     source.starts_with('+')
 }
 
@@ -196,6 +240,10 @@ unqualified host/path to http://"
 /// — the recursive/wildcard guard below exists only so this function's own
 /// verdict is never wrong in isolation, not to prevent a double-count.
 pub(super) fn high_blast_outside_tree_rm(seg: &str) -> Option<Decision> {
+    let seg = match super::brace_words::expanded_text(seg) {
+        Ok(s) => s,
+        Err(()) => return Some(super::brace_words::too_many_ask()),
+    };
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let (head_tok, rest) = tokens.split_first()?;
     let cmd = normalized_command(head_tok);

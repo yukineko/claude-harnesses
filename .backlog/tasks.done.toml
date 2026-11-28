@@ -98011,3 +98011,1289 @@ rev = "6717c33e6085f121f7b84fcc944d2f0888d38a5c"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "e21d3035"
+title = "blastguard: wrapper (env/command/timeout/nice/sudo) before git push -f/--force origin main is Allow while bare form is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured on main 9dc1aaf2b with the real binary. Bare git push -f/--force origin main: Ask (main mode), Deny (subagent). With env/command/timeout 5/nice/sudo prefix: Allow in both modes (20/20 combos). Ruling: force push is Ask (high_blast_tier.rs, backlog_audit_s02.rs); no ruling allows it. Force push to main is irreversible on remote. Test: crates/blastguard/tests/backlog_20261128_wrapper_force_push.rs (RED test is #[ignore]d)."
+created_at = 1795807451
+updated_at = 1795829163
+weight = 0.0
+issue_number = 2008
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2008"
+issue_closed_at = 1795829165
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_wrapper_force_push -- --ignored"
+rev = "e5449de869ccb2fb76e7df8a2e9ba6e735e2f6f4"
+observed_at = 1795807451
+detail = """
+exit 101: 
+   Compiling blastguard v0.2.983 (/Users/yuki/src/.harness-worktrees/red-wrapper-force-push/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 27.67s
+     Running tests/backlog_20261128_wrapper_force_push.rs (target/release/deps/backlog_20261128_wrapper_force_push-2d41c258c7c5a83b)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_wrapper_force_push`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_wrapper_force_push"
+exit = 0
+passed = 3
+rev = "9f8d020ac90e8c12a7716796406309190324deb1"
+observed_at = 1795829161
+output_digest = "sha256:4bd8fb767282dabc04c7f24ddffa098268f025718a027073ed0ed7ca92f59213"
+excerpt = """
+
+running 3 tests
+test control_bare_force_push_is_ask_main_and_deny_subagent ... ok
+test control_wrapped_plain_push_stays_allow ... ok
+test wrapped_force_push_is_never_weaker_than_bare ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_20261128_wrapper_force_push.rs (target/debug/deps/backlog_20261128_wrapper_force_push-e42c6b01949afcf1)
+"""
+
+[task.closure.red]
+rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "21d05411"
+title = "blastguard fail-open: DEBUG trap cd to system dir then relative write is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Pre-existing on base: trap 'cd /etc' DEBUG; echo hi > ok.log is Allow, measured to change cwd (bcwd:/usr, zcwd:/usr), so a relative write can land in a system dir. Must be non-Allow in main and Deny in subagent."
+created_at = 1795804610
+updated_at = 1795829166
+weight = 0.0
+issue_number = 2004
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2004"
+issue_closed_at = 1795829170
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_debug_trap_cd_relative_write -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804610
+detail = """
+exit 101: .979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 23.97s
+     Running tests/backlog_20261128_debug_trap_cd_relative_write.rs (target/release/deps/backlog_20261128_debug_trap_cd_relative_write-5edcc7666695def3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_debug_trap_cd_relative_write`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_debug_trap_cd_relative_write"
+exit = 0
+passed = 1
+rev = "9f8d020ac90e8c12a7716796406309190324deb1"
+observed_at = 1795829166
+output_digest = "sha256:49f5ee57fc37753e79bb03ac26b60d485152570422b4e73e7b5f7a8c99e2991e"
+excerpt = """
+
+running 1 test
+test debug_trap_cd_then_relative_write_is_never_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_20261128_debug_trap_cd_relative_write.rs (target/debug/deps/backlog_20261128_debug_trap_cd_relative_write-74a98ab31a7b54fd)
+"""
+
+[task.closure.red]
+rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "1f968657"
+title = "blastguard: subagent perl -pi -e in-place edit on cwd file denied as option -pi not modelled"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Re-filed from unmerged filing-run87637b (orig a92a82b1). Measured 2026-11-28 main a4c078f2d; see test docstring. Readings (a) FP (b) intended B.5; older control in backlog_20261114_perl_single_quoted_dollar_dot_fp fails the same way."
+created_at = 1795804774
+updated_at = 1795829172
+weight = 0.0
+issue_number = 2005
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2005"
+issue_closed_at = 1795829175
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261122_perl_literal_var_path_fp -- --include-ignored"
+rev = "bc8f7aacf57f8c970f10d24735066dce90db346a"
+observed_at = 1795804774
+detail = """
+exit 101: rd v0.2.975 (/Users/yuki/src/.harness-worktrees/salvage-leftovers/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.01s
+     Running tests/backlog_20261122_perl_literal_var_path_fp.rs (target/debug/deps/backlog_20261122_perl_literal_var_path_fp-f8cebfb3a5de70f0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261122_perl_literal_var_path_fp`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261122_perl_literal_var_path_fp"
+exit = 0
+passed = 5
+rev = "9f8d020ac90e8c12a7716796406309190324deb1"
+observed_at = 1795829171
+output_digest = "sha256:238c7ec32f64d864d32553bc5f54afff47d8a8b173a7f5baec9dc94ff448d8c6"
+excerpt = """
+
+running 5 tests
+test perl_in_place_on_literal_assigned_variable_is_allowed ... ok
+test perl_in_place_literal_path_is_allowed ... ok
+test control_perl_var_from_cmdsub_is_not_allowed ... ok
+test control_perl_in_place_on_system_file_is_not_allowed ... ok
+test perl_in_place_cluster_forms_on_cwd_file_are_allowed_in_both_modes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261122_perl_literal_var_path_fp.rs (target/debug/deps/backlog_20261122_perl_literal_var_path_fp-642b12a283170cb9)
+"""
+
+[task.closure.red]
+rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "2f8d2abe"
+title = "blastguard: python stdin-heredoc os.unlink('/tmp/x.tmp') is Deny while bare rm /tmp/x.tmp is Allow (spec: os.unlink(p) == rm p)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Salvaged from unmerged bg-walk-clean-6bbf (2026-11-08 parity rule). Measured 2026-11-28 main a4c078f2d blastguard 0.2.976. Readings (a) FP, parity with bare rm per docs/specs/blastguard.md; (b) intended: python unlink stays stricter. See test docstring."
+created_at = 1795805156
+updated_at = 1795829176
+weight = 0.0
+issue_number = 2006
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2006"
+issue_closed_at = 1795829178
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm -- --include-ignored"
+rev = "487734a061deecff62277b6c96185d013b81671f"
+observed_at = 1795805156
+detail = """
+exit 101: ers/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm.rs (target/debug/deps/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm-0c023ef05bbbcff3)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm"
+exit = 0
+passed = 2
+rev = "9f8d020ac90e8c12a7716796406309190324deb1"
+observed_at = 1795829175
+output_digest = "sha256:c7c28aad7aa496d1bd8112b0691512837b7493222f9662d330ed29a18bd25458"
+excerpt = """
+
+running 2 tests
+test control_bare_rm_tmp_is_allow_and_etc_hosts_is_deny_both_ways ... ok
+test parity_os_unlink_tmp_literal_matches_bare_rm ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm.rs (target/debug/deps/backlog_20261128_python_unlink_tmp_literal_parity_with_bare_rm-4c232e3e6793f6c1)
+"""
+
+[task.closure.red]
+rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "fb4f650d"
+title = "condukt testscope: a confirmed bare run of the task test makes tdd red --cmd a refused rerun, so no RED proof / F->P oracle is reachable (mirror of 8f82f09d, RED side)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "testscope",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Re-filed from unmerged worktree red-oracle-ledger. Observed 2026-11-21 main 11c04144d run-20261121-213949-96292 t1; re-measured RED 2026-11-28 main a4c078f2d. See test docstring for readings (a) defect / (b) SKILL Phase 6 pre-run consumes the single run."
+created_at = 1795804950
+updated_at = 1795829180
+weight = 0.0
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red -- --include-ignored"
+rev = "3aa26181a1e23738d5e69387a4bad62d2bbeb488"
+observed_at = 1795804950
+detail = """
+exit 101: uki/src/.harness-worktrees/salvage-leftovers/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.76s
+     Running tests/backlog_20261121_testscope_bare_run_blocks_tdd_red.rs (target/debug/deps/backlog_20261121_testscope_bare_run_blocks_tdd_red-eda304dd26a33dc8)
+error: test failed, to rerun pass `-p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_20261121_testscope_bare_run_blocks_tdd_red"
+exit = 0
+passed = 3
+rev = "9f8d020ac90e8c12a7716796406309190324deb1"
+observed_at = 1795829179
+output_digest = "sha256:3e9f05dde880bc335f42d69ce74c9f1bed5ddc4e358dd8afac044d5e738ae305"
+excerpt = """
+
+running 3 tests
+test control_tdd_red_first_on_tree_is_allowed ... ok
+test red_tdd_red_after_bare_run_on_same_tree_is_not_denied ... ok
+test control_bare_rerun_on_same_tree_is_denied ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261121_testscope_bare_run_blocks_tdd_red.rs (target/debug/deps/backlog_20261121_testscope_bare_run_blocks_tdd_red-21867c8274b81ad6)
+"""
+
+[task.closure.red]
+rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d805f80f"
+title = "blastguard fail-open: rm -rf /etc behind xcrun/watch/caffeinate/arch/chronic/script/unbuffer is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830717
+updated_at = 1795830952
+weight = 0.0
+issue_number = 2011
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2011"
+issue_closed_at = 1795830954
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny -- --ignored"
+rev = "b6cc1720fdb0020b52cd92d1866165a08a3e3b31"
+observed_at = 1795830717
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s
+     Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-f48156f04a86cc88)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny"
+exit = 0
+passed = 3
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830951
+output_digest = "sha256:98cf9dc7a2e2fd158f06db84ba3bf62e968d9fc1d80fab67c15d1ab0e31e26ed"
+excerpt = """
+
+running 3 tests
+test control_bare_and_known_wrapper_system_harm_is_deny ... ok
+test control_wrapped_harmless_is_allow ... ok
+test wrapped_system_harm_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-d483324fe6f1751d)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "005d3a94"
+title = '''blastguard fail-open: quoted/escaped force refspec ("+main", '+x', \+x) in git push is Allow; bare +main is Ask/Deny'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830577
+updated_at = 1795830956
+weight = 0.0
+issue_number = 2010
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2010"
+issue_closed_at = 1795830960
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_quoted_force_refspec -- --ignored"
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+observed_at = 1795830577
+detail = """
+exit 101: (/Users/yuki/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.34s
+     Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-917395933581b067)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_quoted_force_refspec`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_quoted_force_refspec"
+exit = 0
+passed = 3
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830955
+output_digest = "sha256:e77295e7f67912d394b03d74c7a18e9451532edec4c1a1501d7ba1aedf054da5"
+excerpt = """
+
+running 3 tests
+test control_plain_push_and_system_harm ... ok
+test control_unquoted_force_refspec_is_ask_main_deny_subagent ... ok
+test quoted_force_refspec_is_never_weaker_than_unquoted ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-83dd356e96f1e4a4)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3221b79b"
+title = "blastguard fail-open: xcrun/watch/caffeinate/arch/chronic/script/unbuffer wrapper makes main-tree git add -A Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830761
+updated_at = 1795830962
+weight = 0.0
+issue_number = 2012
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2012"
+issue_closed_at = 1795830964
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage -- --ignored"
+rev = "cace36ec502ddc2ba753ed0b118b06bca6dbb120"
+observed_at = 1795830761
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261128_detector_wrapper_whole_tree_stage.rs (target/debug/deps/backlog_20261128_detector_wrapper_whole_tree_stage-e1147e0d3aa537be)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage"
+exit = 0
+passed = 4
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830961
+output_digest = "sha256:60dbaef0a0eef1c93367cc5317c1048a2387394e1c5a11ccf332e02ced813358"
+excerpt = """
+
+running 4 tests
+test control_bare_whole_tree_stage_is_ask ... ok
+test control_wrapped_explicit_path_stage_is_allow ... ok
+test wrapped_whole_tree_stage_in_main_tree_is_ask ... ok
+test control_wrapped_system_harm_is_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261128_detector_wrapper_whole_tree_stage.rs (target/debug/deps/backlog_20261128_detector_wrapper_whole_tree_stage-461217a7c8df9acf)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "76dd7aea"
+title = "blastguard: git push deleting a remote branch (:main / --delete main) is Allow while force push is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795827516
+updated_at = 1795830273
+weight = 0.0
+issue_number = 2009
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2009"
+issue_closed_at = 1795830276
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_push_delete_remote_branch -- --include-ignored"
+rev = "5e609cfbf869dc82cbf54192a1733db5dec0dfa5"
+observed_at = 1795827516
+detail = """
+exit 101: .2.985 (/Users/yuki/src/.harness-worktrees/red-push-delete-main/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-fc1a37257cbf6f54)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_push_delete_remote_branch`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_push_delete_remote_branch"
+exit = 0
+passed = 4
+rev = "366d46fc21ba994fb71f844306a7b2198c584d0a"
+observed_at = 1795830250
+output_digest = "sha256:4828073c2060ea4331552d6b22401c52649b45e0b33115972aeb935381b38fb9"
+excerpt = """
+
+running 5 tests
+test measure_table ... ignored, measurement table, not a contract
+test control_plain_push_stays_allow ... ok
+test control_force_push_main_is_ask_main_and_deny_subagent ... ok
+test delete_remote_main_is_ask_or_deny_in_main_mode ... ok
+test delete_remote_main_is_deny_in_subagent_mode ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+   Compiling blastguard v0.2.991 (/Users/yuki/src/.harness-worktrees/fix-push-delete/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.71s
+     Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-77af601ba8caeff1)
+"""
+
+[task.closure.red]
+rev = "986639d6c8ca9b1ff011054a8d0d611696c9559f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "b6726716"
+title = "blastguard: /flow driver session denies the repo's own tracked-clean scripts/ (python3 -m pytest scripts/test_*.py; main-tree scripts/ run from own worktree, e.g. cd main && (scripts/rollout-plugins.sh ...)) — ruling 2026-11-28 「driverで repo スクリプトを許可 (推奨)」: extend driver_trusts_program like a50833d7; dirty/untracked stay Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795832134
+updated_at = 1795832667
+weight = 0.0
+issue_number = 2013
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2013"
+issue_closed_at = 1795832669
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_driver_repo_scripts_allow -- --ignored"
+rev = "1fd1f0082ea3ed8de157368507b6da381bb84475"
+observed_at = 1795832134
+detail = """
+exit 101: v0.2.997 (/Users/yuki/src/.harness-worktrees/red-driver-scripts/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.60s
+     Running tests/backlog_20261128_driver_repo_scripts_allow.rs (target/debug/deps/backlog_20261128_driver_repo_scripts_allow-8a8db73da0f8e6b1)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_driver_repo_scripts_allow`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_driver_repo_scripts_allow"
+exit = 0
+passed = 11
+rev = "e87f7b4e6a1f73ee398b606b46bc37cdb579c3f7"
+observed_at = 1795832664
+output_digest = "sha256:cd9df6285ba4480b8a5bae9021010505b1f80bf6f24911319cb26613c68bc7f9"
+excerpt = """
+
+running 11 tests
+test control_non_driver_session_still_asks ... ok
+test control_driver_tracked_harmful_text_script_follows_existing_b5 ... ok
+test control_driver_tracked_outside_scripts_dir_pytest_not_allow ... ok
+test control_driver_script_outside_repo_not_allow ... ok
+test control_driver_staged_but_uncommitted_script_not_allow ... ok
+test driver_own_worktree_scripts_direct_bash_python_are_allow ... ok
+test control_driver_dirty_script_not_allow ... ok
+test control_driver_untracked_script_not_allow ... ok
+test red_driver_cd_main_tree_subshell_script_is_allow ... ok
+test red_driver_own_worktree_python_m_pytest_tracked_scripts_test_is_allow ... ok
+test red_driver_main_tree_scripts_four_shapes_are_allow ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests/backlog_20261128_driver_repo_scripts_allow.rs (target/debug/deps/backlog_20261128_driver_repo_scripts_allow-4eedbaeac09379dd)
+"""
+
+[task.closure.red]
+rev = "1fd1f0082ea3ed8de157368507b6da381bb84475"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "24fa1aa6"
+title = "blastguard: rm through <symlink>/.. reaches ~/.claude/settings.json but is Allow (rm -f) / Ask (rm -rf); direct spelling is Deny (lexical .. collapse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795833934
+updated_at = 1795834626
+weight = 0.0
+issue_number = 2014
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2014"
+issue_closed_at = 1795834629
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config -- --ignored"
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+observed_at = 1795833934
+detail = """
+exit 101: es/red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
+     Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-3e19a779c1c810c2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config"
+exit = 0
+passed = 3
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834625
+output_digest = "sha256:3b8133b2f1186a168959c9e51ee2ddbd3dd129ee9f8d37e37d103ffb4d906253"
+excerpt = """
+
+running 3 tests
+test control_direct_protected_config_delete_is_deny ... ok
+test control_plain_delete_in_cwd_is_allow ... ok
+test symlink_dotdot_protected_config_delete_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-17f6a8664a1ee194)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "66e7a741"
+title = "blastguard: brace expansion hides destructive git flags — git reset {--hard,HEAD} / git checkout {--,.} Allow (expanded Deny); git clean {-f,-x} / git push {--force,origin} main / git branch {-D,foo} Allow (expanded Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795833978
+updated_at = 1795834630
+weight = 0.0
+issue_number = 2015
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2015"
+issue_closed_at = 1795834633
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag -- --ignored"
+rev = "f76ae4147516af18ad26179d6ce533740a80e388"
+observed_at = 1795833978
+detail = """
+exit 101: red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
+     Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-9a67102d66b409e5)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag"
+exit = 0
+passed = 4
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834629
+output_digest = "sha256:cfc2f4eb676cd9eba22e969fb71b5c9777b4c3da7b16fae6f02a256024870321"
+excerpt = """
+
+running 4 tests
+test control_expansions_are_what_bash_runs ... ok
+test control_harmless_braces_are_allow ... ok
+test braced_destructive_git_flag_matches_expanded_verdict ... ok
+test control_expanded_spelling_keeps_its_verdict ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-82dda1b9f4e0f95a)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "46145358"
+title = "blastguard: system harm via command-position brace — {rm,-rf} /etc and {rm,-rf,/etc} are Ask, expanded rm -rf /etc is Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795834020
+updated_at = 1795834634
+weight = 0.0
+issue_number = 2016
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2016"
+issue_closed_at = 1795834636
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_command_position_system_harm -- --ignored"
+rev = "fd98a55f5dbf54bdfe1bf3c5ee64b76df632c7ce"
+observed_at = 1795834020
+detail = """
+exit 101: tector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.83s
+     Running tests/backlog_20261128_detector_brace_command_position_system_harm.rs (target/debug/deps/backlog_20261128_detector_brace_command_position_system_harm-0c924be79dce96a0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_command_position_system_harm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_command_position_system_harm"
+exit = 0
+passed = 4
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834633
+output_digest = "sha256:8238883ee39eb9f3ae39007511f4d28f8bef4f50d5aa3ab3b8cb9afe1d2d7859"
+excerpt = """
+
+running 4 tests
+test control_braced_forms_expand_to_rm_rf_etc ... ok
+test control_harmless_command_position_brace_is_not_deny ... ok
+test command_position_brace_system_harm_is_deny ... ok
+test control_spelled_and_argument_braces_are_deny ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_detector_brace_command_position_system_harm.rs (target/debug/deps/backlog_20261128_detector_brace_command_position_system_harm-a6eb6b963a11e03c)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "96faed52"
+title = "blastguard detector: git --output to protected config is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed on main f60cd1d6e (RED at ee9eca672): Allow for git diff/log/show --output=<HOME>/.claude/settings.json, git diff --output <path> (separate arg), git diff --output=<HOME>/.claude/hooks/pre.sh, git worktree add <HOME>/.claude/hooks/w, touch dlink / touch <abs>/dlink where dlink is a dangling symlink -> <HOME>/.claude/hooks/new.sh. Real git confirmed --output forms overwrite the target. Not reproduced: cp payload dlink via the same dangling link (already not Allow). Controls green: cp payload <HOME>/.claude/settings.json not Allow; git diff --output=out.patch Allow. Test: crates/blastguard/tests/backlog_20261128_detector_git_output_protected_config.rs (branch red-git-output)."
+created_at = 1795835829
+updated_at = 1795836848
+weight = 0.0
+issue_number = 2017
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2017"
+issue_closed_at = 1795836850
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
+rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
+observed_at = 1795835829
+detail = """
+exit 101: rness-worktrees/red-git-output/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.11s
+     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-4c0613a04b74e827)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_git_output_protected_config`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_git_output_protected_config"
+exit = 0
+passed = 5
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836847
+output_digest = "sha256:a698d3488dddafa887cfbf6f658045e68fb6ee9d934dbd4cce0bec72c4a0be32"
+excerpt = """
+
+running 5 tests
+test git_worktree_add_under_protected_hooks_is_not_allow ... ok
+test control_direct_cp_to_protected_config_is_not_allow ... ok
+test control_git_diff_output_to_plain_file_is_allow ... ok
+test dangling_symlink_write_into_protected_hooks_is_not_allow ... ok
+test git_output_option_to_protected_config_is_not_allow ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261128_detector_git_output_protected_config.rs (target/debug/deps/backlog_20261128_detector_git_output_protected_config-947cce8f2a1d6ad4)
+"""
+
+[task.closure.red]
+rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ea96e65d"
+title = "blastguard detector: relative-path rm/mv of protected config or tree containers is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Measured on main 5de28ea57 (RED commit f330b1d20, test crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs). Allow observed: (1) cwd ~/.claude: rm settings.json / rm -f settings.json / rm -f ./settings.json (absolute rm -f ~/.claude/settings.json is Deny via protected-path-disarm); (2) git apply --unsafe-paths --directory=HOME/.claude with a patch file from the scratchpad, cwd worktree; (3) mv HOME/src/.harness-worktrees/ to scratchpad/moved (moves all linked worktrees), cwd worktree; (4) cwd = main tree: rm -rf src. Note: cases (2) and (3) are Allow even with absolute paths, so the hole is wider than relative-path resolution. Not measured: absolute rm -rf MAIN/src verdict. Controls GREEN: absolute rm -f of settings.json Deny; rm -f out.txt in scratchpad Allow. git worktree add under ~/.claude is tracked separately in 96faed52. Reported by independent verifier on fp-ask-rules (verifier8_ask_learning_20261128.rs r8_detector_relative_rm_of_claude_settings_is_allow)."
+created_at = 1795836503
+updated_at = 1795842803
+weight = 0.0
+issue_number = 2018
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2018"
+issue_closed_at = 1795842806
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
+rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
+observed_at = 1795836503
+detail = """
+exit 101: -worktrees/red-relative-protected/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
+     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
+exit = 0
+passed = 6
+rev = "216f01a15ef9aa9ec3986b1cd3715b97bef4a24d"
+observed_at = 1795842802
+output_digest = "sha256:8d36e43e62cfeaa318f6dfd35406f24d12d5924d5e5eb8648c702648efaaadd0"
+excerpt = """
+
+running 6 tests
+test control_absolute_protected_config_delete_is_deny ... ok
+test control_harmless_relative_rm_in_scratchpad_is_allow ... ok
+test git_apply_unsafe_paths_into_claude_dir_is_not_allow ... ok
+test mv_of_worktrees_container_is_not_allow ... ok
+test relative_rm_of_claude_settings_is_not_allow ... ok
+test relative_rm_rf_src_in_main_tree_is_not_allow ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-1d4e242ae0e2d350)
+"""
+
+[task.closure.red]
+rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ffa05737"
+title = "blastguard detector: redirect shapes fail open (zsh >!/>>!/2>! to protected config Allow; redirect after git add -A drops whole-tree Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Measured on main b19e77851 (RED tests committed e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). D1 (test d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow): Allow for 'echo x >! ~/.claude/settings.json', 'echo x >>! ...', 'echo x 2>! ...', 'echo x >! <main>/.githooks/pre-commit' (cwd linked worktree); '&>!' was NOT Allow on main. Controls '>' / '>>' are not Allow. Precondition observed in test: zsh -f -c writes the path after >! / >>! and creates no '!' file. Suspected cause (from verifier, not verified): brush reads '> !' + argument. D2 (test d2_redirect_after_git_add_all_keeps_whole_tree_ask): 'git add -A' is Ask but 'git add -A 2>&1', '> /dev/null', '> log' are Allow; cause (redirect words counted as pathspecs) not verified. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_zsh_bang_clobber_overwrites_protected_config / r9_detector_redirect_drops_git_add_sweep_ask)."
+created_at = 1795840960
+updated_at = 1795845483
+weight = 0.0
+issue_number = 2020
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2020"
+issue_closed_at = 1795845486
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow -- --ignored"
+rev = "eebe135729a339e59f3f5a194401a2ec8b7312c4"
+observed_at = 1795840960
+detail = """
+exit 101: 0.2.1012 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.97s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-66b9e1fbd52ee302)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow"
+exit = 0
+passed = 1
+rev = "50f9ee428d15435dbf8d26556335fe6029c8aa29"
+observed_at = 1795845482
+output_digest = "sha256:3b73f196b32fd572d49b495dde9aa0bf1672326f3396f258d525aafb186be52c"
+excerpt = """
+
+running 1 test
+test d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.70s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-dd5910d9d49e5bc8)
+"""
+
+[task.closure.red]
+rev = "e897078e07be36a6f590dd837f0fc89d847cb02c"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "0e79c339"
+title = "blastguard detector FP: output redirect turns scratchpad 'rm -rf build' Ask into Deny (rm-recursive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured on main b19e77851 (RED tests e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). cwd = <root>/scratchpad under /private/tmp/claude-askrules: 'rm -rf build' is Ask, but 'rm -rf build 2>&1' and 'rm -rf build > log' are Deny. A redirect of rm's output does not change what rm deletes. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_redirect_turns_scratchpad_rm_ask_into_deny)."
+created_at = 1795841017
+updated_at = 1795845488
+weight = 0.0
+issue_number = 2021
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2021"
+issue_closed_at = 1795845490
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny -- --ignored"
+rev = "bd213c9bc85bfc5bfb8f47eaf8ecee01b330b516"
+observed_at = 1795841017
+detail = """
+exit 101: 0.2.1013 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-6a284a858e8f7598)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny"
+exit = 0
+passed = 1
+rev = "50f9ee428d15435dbf8d26556335fe6029c8aa29"
+observed_at = 1795845487
+output_digest = "sha256:ec655523e8c6bcb06daccc66ece6915f0b13672c3fd5914805804bfb7d41bd51"
+excerpt = """
+
+running 1 test
+test d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.53s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-dd5910d9d49e5bc8)
+"""
+
+[task.closure.red]
+rev = "e897078e07be36a6f590dd837f0fc89d847cb02c"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "4e7fc8e2"
+title = "blastguard detector: git/touch/mkdir write targets still reach protected or system paths (8 shapes after 96faed52)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Found by the independent verifier of 96faed52 (commit 879a21288, test crates/blastguard/tests/backlog_20261128_git_write_targets_verifier.rs, 8 ignored REDs, each shape observed writing with real git/touch). (1) --work-tree relative --output resolved from work tree but git resolves from process cwd; (2) format-patch -o <protected dir itself>; (3) worktree add into an existing empty protected dir; (4) stash show -p / reflog / alias --output; (5) git config --file/-f <protected>; (6) checkout-index --prefix=<protected>/; (7) git init / clone / --git-dir init under protected; (8) touch/mkdir into /etc, /System not routed through system_landing_block (cp is Deny). 4-8 were Allow already at 0.2.1005."
+created_at = 1795836857
+updated_at = 1795851168
+weight = 0.0
+issue_number = 2019
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2019"
+issue_closed_at = 1795851171
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier -- --ignored"
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836857
+detail = """
+exit 101:  0 passed; 8 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-50f611af92b15e30)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_git_write_targets_verifier`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier --test verifier_4e7fc8e2_fix_20261128"
+exit = 0
+passed = 41
+rev = "f7fef016e736acd55a4861d2521d3d58c46bb789"
+observed_at = 1795851159
+output_digest = "sha256:324419f705565907ad85b76bb9b11f6da2c1c2d8cb0f28b717146a798151139d"
+excerpt = """
+
+running 22 tests
+test output_indicator_options_are_not_write_targets ... ok
+test bundle_create_to_protected_is_not_allow ... ok
+test archive_output_to_protected_is_not_allow ... ok
+test git_output_into_system_dirs_is_deny ... ok
+test format_patch_output_dir_into_protected_subdir_is_not_allow ... ok
+test dash_c_relative_output_is_placed_in_the_moved_dir ... ok
+test red_checkout_index_prefix_into_protected ... ok
+test control_ordinary_writes_inside_worktree_stay_allow ... ok
+test quoted_and_abbreviated_output_to_protected_is_not_allow ... ok
+test red_git_config_file_rewrites_protected ... ok
+test control_4e7fc8e2_ordinary_git_write_shapes_stay_allow ... ok
+test red_diff_output_via_other_subcommands ... ok
+test red_init_and_clone_create_under_protected ... ok
+test red_touch_mkdir_into_system_dirs_like_cp ... ok
+test red_format_patch_output_dir_is_the_protected_dir_itself ... ok
+test red_worktree_add_into_empty_protected_dir_itself ... ok
+test touch_no_dereference_on_link_itself_is_allow ... ok
+test red_work_tree_relative_output_is_resolved_from_cwd ... ok
+test work_tree_with_lexically_protected_name_is_not_allow ... ok
+test unexpanded_or_missing_output_value_is_not_allow ... ok
+test worktree_add_and_move_under_protected_is_not_allow ... ok
+test touch_and_mkdir_through_links_into_protected_are_not_allow ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+
+running 19 tests
+test control_config_file_named_get_unabbreviated_is_not_allow ... ok
+test green_install_d_into_protected ... ok
+test green_system_dir_install_variants ... ok
+test green_relative_targets_with_cwd_in_dot_claude ... ok
+test green_clone_abbreviated_value_option_shifts_operands ... ok
+test green_system_dir_touch_mkdir_variants ... ok
+test green_work_tree_checkout_into_protected ... ok
+test hole_clone_double_dash_operands ... ok
+test hole_config_abbreviated_file_named_get_is_not_read_only ... ok
+test hole_dash_c_protected_dir_init_without_operand ... ok
+test hole_format_patch_clustered_short_o ... ok
+test hole_clone_derived_name_into_existing_empty_protected_dir ... ok
+test hole_git_dir_env_prefix_init ... ok
+test hole_init_abbreviated_value_option_shifts_operand ... ok
+test hole_init_double_dash_operand ... ok
+test hole_work_tree_checkout_index_prefix_is_relative_to_work_tree ... ok
+test fp_ordinary_writes_stay_allow ... ok
+test hole_worktree_add_abbreviated_reason_shifts_operand ... ok
+test green_spelling_variants_are_not_allow ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+   Compiling blastguard v0.2.1028 (/Users/yuki/src/.harness-worktrees/fix-write-targets/crates/blastguard)
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.58s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-338ad049dac6c88b)
+     Running tests/verifier_4e7fc8e2_fix_20261128.rs (target/debug/deps/verifier_4e7fc8e2_fix_20261128-5134258e07fa3267)
+"""
+
+[task.closure.red]
+rev = "879a2128852c2544ee1cdef17840a5ac3e2516dc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "f63b97b3"
+title = "blastguard detector: 7 protected-target shapes still Allow after ea96e65d (git apply --stat --apply / --dir= / cwd, quoted relative rm, mv of worktree-store parent, separate-git-dir main tree, git rm -r in main tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Independent verifier of ea96e65d (commit 18accae2f, crates/blastguard/tests/backlog_20261128_relative_protected_verifier.rs, 7 ignored REDs). git apply 3 shapes observed rewriting ~/.claude/settings.json with real git. (1) apply.rs returns Allow on any of --check/--stat/--numstat/--summary even when --apply follows; (2) --dir= abbreviation not recognised; (3) git apply run with cwd/-C inside ~/.claude not judged; (4) rm -f "settings.json" / 'settings.json' with cwd ~/.claude Allow (unquoted is Deny); (5) mv <home>/src (parent of .harness-worktrees) Allow; (6) shared_main_tree returns Known(false) when .git is a file (separate-git-dir primary); (7) git rm -r src in a shared main tree Allow. (5) and (7) expectation is the verifier's analogy - confirm when fixing."""
+created_at = 1795842815
+updated_at = 1795851174
+weight = 0.0
+issue_number = 2023
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2023"
+issue_closed_at = 1795851177
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier -- --ignored"
+rev = "6e0e6dec57cf3afea24246ff4f20e908a8a80303"
+observed_at = 1795842815
+detail = """
+exit 101:  passed; 7 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-9bd61be8b48bcf3d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_relative_protected_verifier`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier"
+exit = 0
+passed = 16
+rev = "f7fef016e736acd55a4861d2521d3d58c46bb789"
+observed_at = 1795851171
+output_digest = "sha256:bab0805f877467b710cced954d284c3d216997f400004aaf1735abd45288a6a2"
+excerpt = """
+
+running 16 tests
+test red_git_apply_abbreviated_directory_option_is_not_allow ... ok
+test git_apply_unsafe_paths_alone_is_ask ... ok
+test red_git_apply_in_protected_dir_is_not_allow ... ok
+test git_apply_harmless_spellings_keep_pre_fix_allow ... ok
+test git_apply_directory_spellings_into_claude_are_ask ... ok
+test mv_ordinary_files_keep_pre_fix_allow ... ok
+test mv_of_worktree_store_or_checkout_is_ask ... ok
+test red_mv_of_worktree_store_container_is_not_allow ... ok
+test red_git_apply_readonly_flag_then_apply_is_not_allow ... ok
+test red_quoted_relative_rm_of_settings_is_not_allow ... ok
+test main_tree_tracked_recursive_rm_is_not_allow ... ok
+test red_git_rm_recursive_in_main_tree_is_not_allow ... ok
+test red_separate_git_dir_main_tree_rm_is_not_allow ... ok
+test relative_protected_spellings_are_deny ... ok
+test relative_rm_of_ordinary_files_keeps_pre_fix_verdict ... ok
+test unreadable_worktree_registry_is_ask ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+warning: function `strip_redirect_words` is never used
+  --> crates/blastguard/src/detect/redirect/words.rs:41:4
+   |
+41 | fn strip_redirect_words<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+   |    ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+   Compiling blastguard v0.2.1028 (/Users/yuki/src/.harness-worktrees/fix-write-targets/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-5d2074faeaa8c2ac)
+"""
+
+[task.closure.red]
+rev = "18accae2fb98d6febbd2e7490d40f8da7d4ce4c2"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

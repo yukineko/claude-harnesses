@@ -1,3 +1,5 @@
+pub(super) mod write_targets;
+
 use super::has_unresolvable_expansion;
 use super::protected::{system_entry_landing_block, system_landing_block};
 use super::{
@@ -14,7 +16,14 @@ use super::{
 /// non-recursive single-target delete is below this crate's destructive bar
 /// (same rule `analyze_rm` applies), so only the protected-target case is a
 /// verdict.
+///
+/// Backlog 96faed52: also the entry for the creation verbs `touch` / `mkdir`,
+/// whose operands are judged through symlinks like a `cp` destination
+/// ([`write_targets::analyze_create`]).
 pub(super) fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    if matches!(cmd, "touch" | "mkdir") {
+        return write_targets::analyze_create(cmd, rest, ctx);
+    }
     for op in positional_operands(rest, &[]) {
         if let Some(deny) = protected_disarm_deny(ctx, cmd, op) {
             return deny;
@@ -1022,6 +1031,9 @@ fn copy_move_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>, args: &CopyArgs<'_
             // underneath it. See `protected_glob_deny`.
             if let Some(deny) = protected_glob_deny("mv source", src) {
                 return deny;
+            }
+            if let Some(ask) = super::protected::worktree_move_ask(ctx, "mv source", src) {
+                return ask;
             }
             // Round 2: `find … -exec mv {} /tmp/ \;` re-analyses to the tail
             // `mv {} /tmp/`, whose source operand is the literal placeholder

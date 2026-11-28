@@ -246,6 +246,21 @@ pub(super) fn is_exec_wrapper(cmd: &str) -> bool {
             // the applet named by the next word (daf7611b).
             | "busybox"
             | "toybox"
+            // Argv-forwarding wrappers (backlog d805f80f / 3221b79b): each
+            // runs the words after its own options as a child command, so
+            // the effective command word is BEHIND it. Listing them here is
+            // the single point that reaches every detector, because every
+            // detector resolves its command word through
+            // `command_candidates` (all word starts behind a wrapper), so
+            // per-wrapper option arity (`watch -n 1`, `arch -x86_64`,
+            // `script -q /dev/null`) never has to be modelled.
+            | "xcrun"
+            | "watch"
+            | "caffeinate"
+            | "arch"
+            | "chronic"
+            | "script"
+            | "unbuffer"
     )
 }
 
@@ -723,6 +738,8 @@ pub(super) fn is_redirect_token(tok: &str) -> bool {
 /// AND ending in `>`" — `2>&1` and `>&2` end in a digit and carry their own
 /// target, so they consume only themselves.
 pub(super) fn is_bare_redirect_op(tok: &str) -> bool {
+    // zsh clobber `>!` / `>>!` / `2>!` / `&>!` owns the next word too.
+    let tok = tok.strip_suffix('!').unwrap_or(tok);
     tok.ends_with('>')
         && tok
             .chars()

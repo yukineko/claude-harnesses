@@ -570,6 +570,49 @@ blastguard cannot tell whether it lands in a system directory, so it refuses to 
     }
 }
 
+/// A RELATIVE operand joined onto the segment's absolute cwd, so the protected
+/// judgement sees the same path the absolute spelling gets: `settings.json` with
+/// cwd `~/.claude` is `~/.claude/settings.json` (backlog ea96e65d), and
+/// `hlink/../settings.json` is judged where [`exclude`]'s physical `..`
+/// resolution (which needs an absolute path) lands it.
+/// `None` for an absolute path, `~`/`$` spellings, or an unknown base (those
+/// keep their lexical verdict alone).
+fn cwd_joined(ctx: &Ctx<'_>, path: &str) -> Option<String> {
+    if path.starts_with('/') || path.starts_with('~') || path.contains('$') {
+        return None;
+    }
+    let base = ctx.raw_base.as_deref().filter(|b| b.starts_with('/'))?;
+    Some(format!("{}/{path}", base.trim_end_matches('/')))
+}
+
+/// The operand with ONE pair of plain shell quotes removed (`"settings.json"`,
+/// `'settings.json'`), or `None` when it is not wholly one quoted word or the
+/// inside still needs shell interpretation (`$`, backtick, backslash, a quote).
+/// A raw operand token keeps its quotes, so `"settings.json"` matches no
+/// protected glob while the shell passes `settings.json` to the command
+/// (backlog f63b97b3). Words that need real expansion are left to the callers'
+/// own unresolvable-operand handling.
+pub(super) fn strip_plain_quotes(word: &str) -> Option<&str> {
+    let inner = word
+        .strip_prefix('"')
+        .and_then(|w| w.strip_suffix('"'))
+        .or_else(|| word.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')))?;
+    if inner.contains(['"', '\'', '$', '`', '\\']) {
+        return None;
+    }
+    Some(inner)
+}
+
+/// Whether `hit` holds for the operand as spelled, as joined onto the cwd, or
+/// for either of those with plain quotes removed ([`strip_plain_quotes`]).
+fn hit_any_spelling(ctx: &Ctx<'_>, path: &str, hit: impl Fn(&str) -> bool) -> bool {
+    let spellings = [Some(path), strip_plain_quotes(path)];
+    spellings
+        .into_iter()
+        .flatten()
+        .any(|p| hit(p) || cwd_joined(ctx, p).is_some_and(|abs| hit(&abs)))
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -585,7 +628,8 @@ blastguard cannot tell whether it lands in a system directory, so it refuses to 
 /// decides whether the gates run" and "an agent made that file stop being read"
 /// are different recurring failures and want different signatures.
 pub(super) fn protected_disarm_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
+    let hit = |p: &str| exclude::is_protected_path(p) && !ctx.in_worktree_checkout(p);
+    if hit_any_spelling(ctx, path, hit) {
         Some(Decision::deny(format!(
             "{action} disarms a protected gate/config path ({path}) without writing to it — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -605,9 +649,11 @@ it controls which hooks, gates or policies run, so blastguard refuses"
 /// EVERYTHING under it — the protected paths are a subset of what goes, so there
 /// is nothing to guess about.
 pub(super) fn protected_tree_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if (exclude::is_protected_path(path) || exclude::holds_protected_paths(path))
-        && !ctx.in_worktree_checkout(path)
-    {
+    let hit = |p: &str| {
+        (exclude::is_protected_path(p) || exclude::holds_protected_paths(p))
+            && !ctx.in_worktree_checkout(p)
+    };
+    if hit_any_spelling(ctx, path, hit) {
         Some(Decision::deny(format!(
             "{action} destroys a directory tree holding protected gate/config paths ({path}) — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -615,6 +661,65 @@ it controls which hooks, gates or policies run, so blastguard refuses"
     } else {
         None
     }
+}
+
+/// Ask for a `mv` SOURCE that is a worktree storage root (the container of
+/// every linked worktree under it) or a linked worktree checkout itself
+/// (backlog ea96e65d). Moving either away leaves each worktree's `.git`
+/// `gitdir:` link and the repository's worktree registry pointing at a path
+/// that no longer exists, and takes uncommitted work with it — the same loss
+/// `rm -rf` of a worktree is judged by. Placement reuses the rm side's
+/// ([`crate::scope::SafeRoots::classify_worktree`] /
+/// `is_linked_worktree_checkout`). A wildcard source is placed by its literal
+/// prefix. A source whose spelling names a worktree store but cannot be placed
+/// is also an Ask: "could not place" is not "not a worktree".
+pub(super) fn worktree_move_ask(ctx: &Ctx<'_>, action: &str, src: &str) -> Option<Decision> {
+    let subject = if has_glob_meta(src) {
+        glob_literal_prefix(src)?
+    } else {
+        src.to_string()
+    };
+    let base = ctx.base_for("mv");
+    let refuse = |what: &str| {
+        Some(Decision::ask(format!(
+            "{action} {src} moves {what} — each linked worktree's `.git` link and git's worktree \
+registry would point at a path that no longer exists, and uncommitted work goes with it; \
+blastguard cannot tell that this is intended and refuses to guess"
+        )))
+    };
+    match ctx.scope.classify_worktree(&subject, base) {
+        Determination::Known(super::Placement::IsRoot { .. }) => {
+            return refuse("the worktree storage root holding every linked worktree");
+        }
+        Determination::Known(super::Placement::Inside { .. }) => {
+            match ctx.scope.is_linked_worktree_checkout(&subject, base) {
+                Determination::Known(true) => return refuse("a linked worktree checkout"),
+                Determination::Known(false) => return None,
+                Determination::Undetermined(_) => {}
+            }
+        }
+        Determination::Known(super::Placement::Outside { path }) => {
+            // An ANCESTOR of the storage root takes every linked worktree with it.
+            if ctx.scope.holds_worktree_root(&path) {
+                return refuse("a directory holding the worktree storage root (and every linked worktree in it)");
+            }
+            return None;
+        }
+        Determination::Undetermined(_) => {}
+    }
+    if subject.contains("worktrees") {
+        // Not placeable under a storage root: ask the filesystem instead. An
+        // observed plain directory (no linked checkout in or directly below it)
+        // moves no worktree; anything unobserved keeps the Ask.
+        if let Determination::Known(true) = ctx.scope.holds_no_linked_worktree(&subject, base) {
+            return None;
+        }
+        return Some(Decision::ask(format!(
+            "{action} {src} names a worktree directory that could not be placed — blastguard \
+cannot tell whether it moves linked worktrees away, and refuses to guess"
+        )));
+    }
+    None
 }
 
 /// Verdict for a non-recursive `chown`/`chgrp` whose target is, holds, or globs

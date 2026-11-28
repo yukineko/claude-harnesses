@@ -85,6 +85,7 @@
 //! (they are then re-joined with spaces, so every here-document looks
 //! unterminated) all make the word undeterminable and the line Ask.
 
+use super::redirect::words::redirect_word_shape;
 use super::{closed_substitution_end_strict, Decision};
 
 /// The reason for every provable whole-tree stage. ONE wording so
@@ -118,6 +119,30 @@ struct Word {
     /// under a literal directory ([`glob_bounded_by_literal_dir`]); see
     /// `verdict`.
     glob: bool,
+    /// An UNQUOTED `>` or `<` is part of the word: a redirect operator.
+    redirect: bool,
+}
+
+/// Remove the redirections from `words` (`>`, `2>&1`, `>!`, `< f` …): an
+/// operator word, and the word it owns when its target is detached. A
+/// redirect-bearing word that does not start with an operator is `Err`.
+fn strip_redirect_words(words: Vec<Word>) -> Result<Vec<Word>, &'static str> {
+    let mut out = Vec::with_capacity(words.len());
+    let mut skip_next = false;
+    for w in words {
+        if std::mem::take(&mut skip_next) {
+            continue;
+        }
+        if !w.redirect {
+            out.push(w);
+            continue;
+        }
+        match redirect_word_shape(&w.text) {
+            Some(owns_next) => skip_next = owns_next,
+            None => return Err("a redirection that does not start its word"),
+        }
+    }
+    Ok(out)
 }
 
 /// Skip a `$`-expansion or backquote starting at `chars[i]`, marking `w`
@@ -302,6 +327,15 @@ fn shell_words(text: &str) -> Result<Vec<Word>, &'static str> {
                 i += 1;
             }
             c => {
+                // `src>log` is the word `src` and the redirect `>log`; only a
+                // digit-only prefix (`2>`) is the operator's own fd number.
+                if (c == '>' || c == '<')
+                    && !w.redirect
+                    && !w.text.chars().all(|d| d.is_ascii_digit())
+                {
+                    out.push(std::mem::take(&mut w));
+                }
+                w.redirect |= c == '>' || c == '<';
                 w.text.push(c);
                 i += 1;
             }
@@ -545,6 +579,14 @@ fn verdict(sub: Sub, args: &[&str], seg: Option<&str>) -> Decision {
         }
     };
     let words = match shell_words(text) {
+        Ok(w) => w,
+        Err(why) => return undetermined(why),
+    };
+    // Redirections are no pathspecs (`git add -A 2>&1`, backlog ffa05737 D2):
+    // drop each operator (with its target word when detached). An unquoted
+    // `>`/`<` inside a word that does not START with an operator
+    // (`a>b`) cannot be read as one thing: Ask.
+    let words = match strip_redirect_words(words) {
         Ok(w) => w,
         Err(why) => return undetermined(why),
     };

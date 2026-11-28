@@ -207,6 +207,40 @@ forge・condukt のスケジューラが再利用）。
   その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
   未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout・
   絶対 path でない toplevel・porcelain v1 として読めない status 出力 — は全て Ask。
+- **`>` 以外の書き込み先も保護設定判定に流す（`detect/fileops/write_targets.rs`、backlog 96faed52、blastguard 0.2.1008）** —
+  git 自身が書く path と、symlink 越しに作る verb の operand を、`cp` 宛先・`tee`・`sort -o` と同じ
+  `protected_path_block`（symlink を辿る）+ `protected_glob_deny` + `system_landing_block` に通す。対象:
+  `git diff|log|show|whatchanged|diff-tree|diff-index|diff-files|range-diff|format-patch|archive` の
+  `--output=F` / `--output F`（`--ou` 以上の前方一致省略形。`--output-indicator-*` 等は別 option で対象外）、
+  `git format-patch -o DIR|-oDIR|--output-directory DIR`、`git archive -o F`、`git bundle create F`、
+  `git worktree add PATH`（最初の operand。`-b`/`-B`/`--reason` の値は除く）、`git worktree move WT DEST`
+  （2 番目）。相対 path は `-C`/`--work-tree` を累積した directory 起点で置く（`git_moved_dir`）。
+  `touch` / `mkdir` の operand は同じ判定を通すので、リンク先が保護 path の dangling symlink
+  （`touch dlink`）は止まる（`touch -h`/`--no-dereference` は link 自身を変えるので字面のまま判定。
+  `-d`/`-r`/`-t`/`-A`・`mkdir -m` の値は operand ではない）。判定不能は Ask: 値の無い write option、値が
+  runtime 展開（`$`・backtick）または空、`-C` 等の directory が置けないときの相対 target。通常の
+  `git diff --output=out.patch`（worktree 内の plain file）は Allow のまま。
+  **backlog 4e7fc8e2（write target を 1 つの lib に集約）**: `--output` は**任意の** git subcommand
+  （`stash show -p`・`reflog`・alias 経由・未知の subcommand）で書き込み先として扱う。`git config --file|-f F`
+  （`--get*`/`--list`/`get`/`list` の読み取り形は除く）、`git checkout-index --prefix=D/`、`git init [D]` /
+  `--separate-git-dir` / `--git-dir=D init`、`git clone SRC D` も対象。ディレクトリを作る/埋める target
+  （`format-patch -o`・`worktree add|move`・`--prefix`・`init`・`clone`）は dir 自身が保護 dir / 保護 path を
+  含む dir（`~/.claude`）/ system dir でも止める（`dir_block`）。相対 target は process cwd 起点で、
+  動かすのは `-C` だけ（`--work-tree` は cwd を動かさないので無視。実 git で観測。例外は
+  `checkout-index`: git が work tree top へ chdir するので `--prefix=REL` は `--work-tree` 起点）。`touch`/`mkdir` は
+  `/etc`・`/System` など system dir 下を `cp` と同じ Deny にする（`touch -h` は字面のみ）。
+  **git argv パーサ 1 本化（`detect/git/argv.rs`、backlog 4e7fc8e2 の 10 抜け道）**: 各 subcommand の語は
+  option 表（long 名・short 文字・値の有無）に対して 1 つのパーサが読む — `--` 以降は全て operand、long は完全一致→
+  一意な接頭辞（`long_opt::resolve_long_abbrev`）、`--no-X` は `--X` の否定、`--name=V` / `--name V`、短縮束
+  （`-ko D`）は表で分解し値付き short は残り→次語を値に取る。曖昧・未知の option は undetermined で、その行の
+  path になりうる全語（operand・`--opt=V` の V・short の glued 値）を Ask で判定する（保護/system に当たらなければ
+  Allow）。`git init` は operand 無しなら `-C` 後の cwd 自身が着地点、`GIT_DIR=D git init` は D が着地点（それ以外の
+  subcommand では `GIT_DIR`/`GIT_WORK_TREE` env 前置の値が置ける literal のときだけ landing 判定）。`git clone SRC` は
+  宛先省略なら SRC の basename（`.git`/`.bundle`/末尾 `/` 除去、`--bare`/`--mirror` は `.git` 付き）を cwd 起点で判定、
+  導出名が実行時展開なら cwd 自身を判定する（旧残余「導出名は判定しない」を解消）。`git apply` も同じパーサ。
+  **残余**: `checkout-index --prefix=REL` で `--work-tree` 無しのとき cwd 起点で判定する（git は work tree top 起点なので
+  cwd が work tree の subdir の場合は未検証）。generic の `--output` 走査と `archive -o` は未知 option を読み飛ばす
+  （lenient。target を名指す option は表にあるものだけ）。
 - **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
   他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
   （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。
@@ -699,6 +733,11 @@ forge・condukt のスケジューラが再利用）。
   `Undetermined`（未知の option）は pipe/here-document 供給時に Ask を記録したうえで program も判定する。
   code interpreter は従来の `stage_has_program_operand` のまま。回帰テスト:
   `crates/blastguard/tests/backlog_20261114_pipe_to_shell_with_value_flags_or_s_args.rs`。
+- **segment の語は shell と同じく brace 展開してから各 detector に渡す（`detect/brace_words.rs`、
+  `detect/high_blast.rs` の `analyze_high_blast_tier` / `high_blast_outside_tree_rm`、backlog 66e7a741, 46145358）** —
+  引用・エスケープの外にある静的なカンマ群（入れ子・連続を含む）を展開し、`git reset {--hard,HEAD}` は
+  `git reset --hard HEAD`、`{rm,-rf} /etc` は `rm -rf /etc` として判定する。代入語・引用内・置換を含む語・
+  `{x}`/`{}`・連番 `{a..c}` は書かれたまま。1 segment の展開語数が 256 を超えたら判定不能として Ask。
 - **shell へ流し込むブレースグループはメンバー出力の連結を program として読む（`detect/payload/brace_feeder.rs`、
   `detect/ast/support.rs` の `brace_group_stdin`、`detect/ast/b5.rs` の `piped_by_compound_stage`、backlog 7eb86bb3）** —
   `{ echo …; printf …; } | bash` のメンバーが全て素の `echo` か静的に評価できる `printf` で、区切りが
@@ -1679,6 +1718,24 @@ forge・condukt のスケジューラが再利用）。
   （`Effect::shell_spelling`）を host に渡す。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。
+- **`detect/redirect/words`** — redirect 語の読み方の唯一の定義（backlog ffa05737 D1/D2、0e79c339 D3）。
+  `redirect_word_shape` が「この語は redirect 演算子か／次の語を target に持つか」を決める
+  （`>` `>>` `2>` `&>` `>!` `>>!` `2>!` `&>!` `>|` `>&` `<` は次の語が target、`2>&1` `>log` `>!log` は target 付き）。
+  (1) zsh（Bash tool のシェル）の clobber 形 `>!` / `>>!` / `2>!` / `&>!` は、truncating / append スキャナが
+  target を `!` と読むため後ろの実 path が未判定だった。target 語が `!` で始まるときは、`!` の後ろ
+  （`!` 単独なら次の語）を**第二の target 候補**として追加で判定する（bash 読みの `!` も従来どおり判定）。
+  (2) `git add -A 2>&1` / `> log` では redirect 語が pathspec に数えられ、全ツリー sweep の Ask が
+  「path 限定」の Allow になっていた。`git_stage` は quote 解釈済みの語から、先頭が演算子の redirect 語
+  （と detached なら次の語）を取り除いて判定し、語の途中に unquoted の `>`/`<` がある形（`a>b`）は Ask。
+  (3) scratchpad の `rm -rf build 2>&1` / `> log` が redirect 語を operand（path）と数えて Deny だった。
+  `detect` の rm dispatch は redirect 語を取り除いた語列を `analyze_rm` に渡す（redirect 先自体は redirect 規則が判定する）。
+  語列の quote を追えない形（`\` 、backtick、`$(`、quote 文字を含む語）では取り除かず従来どおりに読む。
+  追記（独立検証者の RED 3 件）: (a) append スキャナも `>>` 直後の `&` / `|`（`>>&` `>>|` `>>&!`）を
+  演算子の一部として読み飛ばし（`operator_modifier_len`、truncating 側と共通）、(b) rm は zsh 読みと
+  bash 読み（`>! x` は `> !` ＋ operand `x`）の両方を判定して厳しい方を採り（`judge_readings`）、
+  (c) git_stage は語の途中の unquoted `>` / `<` を「語の前半＋redirect」に分割して読む
+  （`git add src>log` は `git add src` と同じ判定。数字だけの前置は fd 番号）。
+  `words::is_bare_redirect_op` も `>!` 系を「次の語を持つ」演算子として扱う。
 
 ## 安定 rule id（overwatch 署名の粒度確保）
 
@@ -1919,3 +1976,36 @@ driver セッションでは `ask` を出さない機構を blastguard 自身に
   `ask-hardened-to-deny` として payload ごと記録する。2 度目 deny の ask 化は行わない。`Deny` は不変。
 - 登録が無い・stale・別セッション・registry 読み取り不能・payload パース不能では判定を変えない。
 - RED: `crates/blastguard/tests/backlog_20261121_flow_driver_session_never_asks.rs`。
+
+## cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除（backlog ea96e65d）
+
+絶対パスでは Deny/Ask になる破壊的コマンドが、cwd 依存の綴りや別経路で Allow だった 4 件の fail-open の是正。
+いずれも既存の判定関数へ「正しく正規化した値」を流す形で、判定不能は制限側へ倒す。
+
+- 相対 operand の保護判定（`detect/protected.rs::cwd_joined`）: `protected_disarm_deny` / `protected_tree_deny`
+  （`rm` operand、`mv` の source）は、相対 operand を segment の絶対 cwd に結合した絶対パスも判定する
+  （従来は `..` を含むものだけ）。cwd が `~/.claude` の `rm settings.json` / `rm -f ./settings.json` は絶対綴りと同じ Deny。
+  `~` / `$` を含む綴りと cwd 不明は従来どおり lexical 判定のみ。
+- `git apply`（`detect/git/apply.rs::git_apply_verdict`）: `--directory=<v>` / `--directory <v>` の値を cwd（`git -C` 反映後）基準で絶対化し、
+  `protected_landing_block` / `protected_path_block` に通す（保護パスそのもの＝Ask、保護パスを含むディレクトリ＝Ask、
+  自 linked worktree checkout 内は従来どおり免除）。値が置けない・値が無い・`-C` が置けないときは Ask。
+  `--unsafe-paths` は patch が work tree 外（`../` 経由）へ書けるようにし、patch 本文は command line に無いので Ask。
+  `--check` / `--stat` / `--numstat` / `--summary` は書かないので従来どおり。
+- `mv` の source（`detect/protected.rs::worktree_move_ask`）: worktree storage root そのもの（linked worktree の container）、
+  または linked worktree checkout 自身（`SafeRoots::classify_worktree` / `is_linked_worktree_checkout`。rm 側と同じ置き場判定）は Ask。
+  glob は literal prefix で置く。置けないが綴りに `worktrees` を含むものも Ask。storage 外・worktree 内の通常ファイルの mv は不変。
+- main tree の tracked 再帰削除（`deletion.rs::judge_project_operand`、`reversible::TreeGitFacts::shared_main_tree`）:
+  `decide_project` が class 5（git から復元可能）で Allow とした operand でも、tracked を含み、かつ work-tree root が
+  「linked worktree を 1 つ以上持つ primary checkout（`.git` がディレクトリで `.git/worktrees/*` が存在）」であるときは
+  `NotAllowed`（従来の confined Ask / Deny へ落ちる）。`.git/worktrees` の読み取り失敗・`.git` の型が想定外は `None`＝`NotAllowed`。
+  linked worktree を持たない単独 checkout の挙動（`tests/rm_by_target.rs` の class 5 Allow）は変えない。
+  class 4（ignored build output）は tracked==0 なので対象外。
+- 残り 7 shape の是正（backlog f63b97b3、RED=`tests/backlog_20261128_relative_protected_verifier.rs`）: ①`git apply` の long option は
+  git と同じ一意接頭辞解決（`detect/git/long_opt.rs::resolve_long_abbrev`。`--dir=` は `--directory=`、曖昧な接頭辞は `Ambiguous`＝Ask）、
+  read-only 早期 Allow は `--apply`/`--reject` が後ろにあれば無効、cwd/`-C` 自身も landing として判定。②引用付き operand
+  （`"settings.json"`）は引用除去後の語でも保護判定（`strip_plain_quotes`）。③worktree storage root の祖先の `mv` は Ask
+  （`SafeRoots::holds_worktree_root`）。④`.git` がファイル（`--separate-git-dir` の primary）のとき gitdir の `commondir` 有無で
+  linked/primary を判別（読めない・判別不能は `Undetermined`）。⑤`git rm -r` は `rm -rf` と同じ shared main tree 判定
+  （`deletion.rs::git_rm_main_tree_refusal`、判定不能は Ask）。option は `detect/git/rm.rs` が `argv::parse` で読み、
+  `--cached`・`-n`/`--dry-run` は作業ツリーのファイルを消さないので main-tree 拒否の対象外（Allow）。option 表で読み切れない行は拒否側。
+- RED: `crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs`。

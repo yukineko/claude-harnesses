@@ -463,14 +463,17 @@ tags = [
     "p1",
 ]
 touched_files = []
-status = "pending"
-notes = "RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release)."
+status = "failed"
+notes = """
+RED ed0a07521 (blastguard 0.2.967): 20 cases Ask in main, Deny as subagent; repo rule system harm always Deny. Found by b37bc26c verifier on base 24263a0c8; pre-existing, not caused by b37bc26c. b37bc26c cdc77f004 shallow_visit may cover some shapes - unmeasured. Test takes ~6 min (release).
+fix attempt fp-687ece3c 1e0bef688 rejected by opus verifier 2026-11-28: RED goes GREEN but base Deny weakens to Ask after python3 -c fan-out padding x2 for 9 system-harm shapes (rm -rf /, cd / && rm -rf etc, D=etc; rm -rf /$D), d4 entries 10-17x, 12 commands >10s (max 33.7s). Not merged. Regression guard + remaining gap filed as 5eab530d. Needs a structural fix that keeps padding-independent Deny."""
 created_at = 1795797276
-updated_at = 1795797276
+updated_at = 1795806441
+defer_until = 1795979241
 weight = 0.0
 issue_number = 1998
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1998"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -482,3 +485,295 @@ exit 101: rc/.harness-worktrees/session-eaa077f4/crates/blastguard)
     Finished `release` profile [optimized] target(s) in 30.92s
      Running tests/backlog_20261128_nested_system_harm_ask_after_padding.rs (target/release/deps/backlog_20261128_nested_system_harm_ask_after_padding-df6bdf356a0c6ad4)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_nested_system_harm_ask_after_padding`"""
+
+[[task]]
+id = "2b6fa81e"
+title = "blastguard fail-open: prebound rebind - alias before binding + POSIX-mode special-builtin prefix assignment (+ eval prefix unmeasured)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804208
+updated_at = 1795804208
+weight = 0.0
+issue_number = 1999
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1999"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_alias_posix_prefix -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804208
+detail = """
+exit 101: 0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 1m 30s
+     Running tests/backlog_20261128_prebound_alias_posix_prefix.rs (target/release/deps/backlog_20261128_prebound_alias_posix_prefix-2c4a599e19a4ae68)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_alias_posix_prefix`"""
+
+[[task]]
+id = "f71994a8"
+title = "blastguard fail-open: prebound rebind - alias spellings, prebound functions, DEBUG/TRAPDEBUG/PS4 hooks, POSIX-enabling spellings"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804328
+updated_at = 1795804328
+weight = 0.0
+issue_number = 2000
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2000"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round2 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804328
+detail = """
+exit 101:  in 0.62s
+
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 30.47s
+     Running tests/backlog_20261128_prebound_round2.rs (target/release/deps/backlog_20261128_prebound_round2-3f113c28c1a81a79)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round2`"""
+
+[[task]]
+id = "a6603095"
+title = "blastguard fail-open: prebound rebind - POSIXLY_CORRECT variants, function names shadowing builtins, chpwd hooks, PS4 via declare/export/read/printf"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804390
+updated_at = 1795804390
+weight = 0.0
+issue_number = 2001
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2001"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round3 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804390
+detail = """
+exit 101:  in 2.64s
+
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 48.80s
+     Running tests/backlog_20261128_prebound_round3.rs (target/release/deps/backlog_20261128_prebound_round3-ddf99ebb165cb6c2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round3`"""
+
+[[task]]
+id = "680e8510"
+title = "blastguard fail-open: prebound rebind - PS4/PS3 prompt and arithmetic recursion ([[ ]], declare -i, (( )), let), precommand modifiers noglob/nocorrect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804472
+updated_at = 1795804472
+weight = 0.0
+issue_number = 2002
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2002"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round4 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804472
+detail = """
+exit 101: kage cache
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 38.51s
+     Running tests/backlog_20261128_prebound_round4.rs (target/release/deps/backlog_20261128_prebound_round4-df3917b3fe60aba8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round4`"""
+
+[[task]]
+id = "48bf8ea5"
+title = "blastguard fail-open: prebound rebind - array subscripts, zsh numeric args and float, trap-body rebinds, destructive-head Deny retention"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Pre-existing top-level rebind fail-opens: a variable is rebound between its assignment and a redirect and the redirect write lands at the rebound target. Families: aliases, POSIX-mode prefix assignment, DEBUG traps, hook functions, PS4/PS3, arithmetic recursion, array subscripts, zsh numeric args/float, precommand modifiers. Patch approach abandoned after 6 rounds (branch fp-prebound-alias). Fix must be structural: resolve a variable only while every command between binding and use is positively known not to bind or run hooks. A statically resolved command word must still be substituted, including concatenation ${X}m and E=eval; $E ..., which must keep base Deny (measured: evalran concatran quotedconcatran zevalran zconcatran all ran). FP controls must stay Allow: for ((i=0;i<3;i++)); declare -i n=0; n+=1; cleanup(){...}; trap cleanup EXIT INT TERM; alias ll='ls -l'; trap 'echo done' INT. Salvaged RED on branch red-prebound-families."
+created_at = 1795804542
+updated_at = 1795804542
+weight = 0.0
+issue_number = 2003
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2003"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_prebound_round5 -- --ignored"
+rev = "e241892e849cb4e9b427be9f9c9fa9d84a85cf07"
+observed_at = 1795804542
+detail = """
+exit 101:  in 0.56s
+
+   Compiling blastguard v0.2.979 (/Users/yuki/src/.harness-worktrees/red-prebound-families/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 38.23s
+     Running tests/backlog_20261128_prebound_round5.rs (target/release/deps/backlog_20261128_prebound_round5-257d8b712704ef8e)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_prebound_round5`"""
+
+[[task]]
+id = "5eab530d"
+title = "blastguard fail-open: statically resolvable system harm past the memo limit stays Ask in main when its text does not spell a system dir (rm -rf /, cd / && rm -rf etc, D=etc; rm -rf /$D)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the opus verifier of 687ece3c (2026-11-28). After fill3700 padding, the tails cd / && rm -rf etc, D=etc; rm -rf /$D and rm -rf / are main=Ask, sub=Deny under 5 wrappers; base 0.2.974 is the same, so this is a pre-existing gap. The 687ece3c fix attempt (branch fp-687ece3c, 1e0bef688) is NOT merged: it turned base Deny into Ask after python3 -c fan-out padding x2 for 9 shapes (guarded by python_padding_then_unspelled_system_harm_is_deny, which passes on main), d4 entries grew 10-17x, and 12 single commands took over 10s (max 33.7s). The fix must resolve system-harm tails structurally, not by the SYSTEM_PREFIXES text prefilter (may_name_system_path)."
+created_at = 1795806312
+updated_at = 1795806312
+weight = 0.0
+issue_number = 2007
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2007"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test --release -p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling -- --ignored"
+rev = "5362206ca64278668b074c0436bf019f0538b0ba"
+observed_at = 1795806312
+detail = """
+exit 101: f4/crates/blastguard)
+    Finished `release` profile [optimized] target(s) in 31.98s
+     Running tests/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling.rs (target/release/deps/backlog_20261128_system_harm_past_memo_limit_without_dir_spelling-95006f08cfa2b02c)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_system_harm_past_memo_limit_without_dir_spelling`"""
+
+[[task]]
+id = "ad84b715"
+title = "blastguard FP: multi-line git commit -m message line mentioning 'git apply ... <patch>' refused as git apply reading through <"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28, reason: git apply/am reads its patch through `<` (not a here-document): the patch cannot be read here. RED on main b19e77851: main ask / subagent deny; single-line message with same words = allow. Cause candidate: src/detect/git_apply_patch.rs read_patch_readers splits the command per physical line, so a message line inside a double-quoted -m arg becomes its own segment. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f3_*)."
+created_at = 1795842446
+updated_at = 1795842446
+weight = 0.0
+issue_number = 2022
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2022"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f3_commit_message_mentioning_git_apply_lt_patch_same_as_without"
+rev = "206effeaffea4fbf87b9e9e4b033d322c00e0312"
+observed_at = 1795842446
+detail = """
+exit 101: d in 0.58s
+
+   Compiling blastguard v0.2.1011 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-1d0f6662a14f81b8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "e5518fa6"
+title = "blastguard FP: quoted heredoc .rs append body with a bang-backtick string line read as a redirect when later commands follow (rustfmt && cargo test)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28 subagent Deny (reason quoted in the test file). RED on main b19e77851: main deny / subagent deny; same body with no tail = allow. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f2_*). Ruling: heredoc body judged by target language; .rs body is data unless run."
+created_at = 1795843300
+updated_at = 1795843300
+weight = 0.0
+issue_number = 2024
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2024"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f2_rs_heredoc_append_bang_backtick_then_rustfmt_cargo_test_same_as_plain -- --ignored"
+rev = "97bc40be49772fbdd169ea624011b2d87a95226c"
+observed_at = 1795843300
+detail = """
+exit 101:  in 0.63s
+
+   Compiling blastguard v0.2.1012 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-336490f42eff98a9)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "5c848034"
+title = "blastguard detector: 5 more write/delete shapes reach ~/.claude after fix-write-targets (generic git subcommands, alias init, global --work-tree checkout-index/reset, git apply from ancestor of ~/.claude, partially quoted relative rm)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Independent verifier r2 of fix-write-targets (043e51270, crates/blastguard/tests/verifier_fix_write_targets_r2_20261128.rs, 5 ignored REDs; each shape observed writing/deleting with real git/rm under a fake HOME). (1) write_targets.rs generic fall-through only scans --output: git merge-file <protected> / mailsplit -o<dir> / fast-export --export-marks= / credential-store --file=; (2) git -c alias.i=init i <protected>; (3) git --work-tree=~/.claude checkout-index -f -- f (no -a) and --work-tree reset --hard; (4) git apply run in $HOME (an ancestor of ~/.claude) with a patch naming .claude/settings.json; (5) rm "settings".json / settings'.json' / "settings.json"'' with cwd ~/.claude (strip_plain_quotes handles only whole-word quotes). Structural direction: unknown git subcommands with path-looking operands under a protected root -> Ask; alias resolution; quote removal via the shell word parser."""
+created_at = 1795851090
+updated_at = 1795851090
+weight = 0.0
+issue_number = 2025
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2025"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier_fix_write_targets_r2_20261128 hole_ -- --ignored"
+rev = "b854a46ff1cf1bcdd8c02192ce42ac0e06d43f13"
+observed_at = 1795851090
+detail = """
+exit 101: )]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.46s
+     Running tests/verifier_fix_write_targets_r2_20261128.rs (target/debug/deps/verifier_fix_write_targets_r2_20261128-ac688b738aeda4eb)
+error: test failed, to rerun pass `-p blastguard --test verifier_fix_write_targets_r2_20261128`"""

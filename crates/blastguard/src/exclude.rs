@@ -394,48 +394,172 @@ fn has_unresolved_parent(path: &str) -> bool {
     path.split('/').any(|c| c == "..")
 }
 
-/// Resolve `..` segments LEXICALLY — purely syntactic, no disk access.
-///
-/// Deliberately not `canonicalize`: the path may not exist yet (a `cp` creating
-/// its destination), the hook must stay fast, and touching the filesystem from a
-/// PreToolUse hook is a side effect this crate does not take. The price of a
-/// lexical resolution is that it is wrong across a symlinked component
-/// (`link/..` really means the link's target's parent); that error moves paths
-/// INTO the protected set at least as often as out of it, and the union in
-/// [`is_protected_path`] means the unresolved spelling is checked too, so the
-/// protected side never loses a match it previously had.
+/// Resolve `..` segments. For an ABSOLUTE path the prefix before each `..` is
+/// examined on disk first (read-only `canonicalize`, see [`physical_parent`]):
+/// the kernel resolves `link/..` physically, to the link TARGET's parent
+/// (backlog 24fa1aa6: `rm -f <cwd>/hlink/../settings.json` with `hlink ->
+/// ~/.claude/hooks` unlinks `~/.claude/settings.json`), so a purely lexical
+/// fold named a harmless file. When the prefix does not exist, or both readings
+/// agree, the lexical fold is kept byte for byte; when the filesystem cannot
+/// answer, the result is `Undetermined` ([`resolve_parents_det`]) and the
+/// protected predicates answer restrictively. A RELATIVE path has no base here
+/// and is still folded lexically; callers that know the cwd join it first.
 ///
 /// A leading `..` that would escape the start of a RELATIVE path is KEPT, not
 /// dropped: dropping it would silently rewrite `../.claude` into `.claude` and
 /// invent a claim about a directory the string never named. For an ABSOLUTE
 /// path `/..` really is `/` (POSIX), so it is dropped there.
 fn resolve_parents(s: &str) -> String {
+    match resolve_parents_det(s) {
+        Determination::Known(r) => r,
+        // The string form cannot carry "undetermined"; it keeps the `..` text
+        // unresolved, which `has_unresolved_parent` callers refuse and the
+        // protected predicates (which call `resolve_parents_det` directly)
+        // answer restrictively.
+        Determination::Undetermined(_) => s.to_string(),
+    }
+}
+
+/// The physical meaning of `..` after the (absolute) prefix `stack`: when the
+/// prefix exists, `..` is the parent of its CANONICAL form (a symlinked
+/// component makes `link/..` the link target's parent, not the link's own
+/// parent). Returns the components to continue from, or `None` when the
+/// lexical pop is already right (the prefix does not exist, or both readings
+/// name the same directory).
+///
+/// Only a DISAGREEMENT changes the text: `/tmp/a/..` stays `/tmp` even though
+/// `/tmp` is itself a symlink on macOS, so ordinary paths keep their spelling
+/// and only a `..` that really lands elsewhere is rewritten.
+/// `Undetermined` when the filesystem cannot answer (permission, loop, ...).
+fn physical_parent(stack: &[&str]) -> Determination<Option<Vec<String>>> {
+    use std::io::ErrorKind;
+    let prefix = format!("/{}", stack.join("/"));
+    let canon = match std::fs::canonicalize(&prefix) {
+        Ok(c) => c,
+        // Nothing there: the kernel would fail the `..` walk, so no symlink can
+        // redirect it and the lexical fold is the only reading.
+        Err(e) if e.kind() == ErrorKind::NotFound => return Determination::Known(None),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "`{prefix}` could not be resolved to fold a `..` ({e})"
+            ))
+        }
+    };
+    let phys_parent = canon.parent().map(std::path::Path::to_path_buf);
+    let lex_parent = format!("/{}", stack[..stack.len().saturating_sub(1)].join("/"));
+    let lex_canon = std::fs::canonicalize(&lex_parent).ok();
+    if lex_canon == phys_parent {
+        return Determination::Known(None);
+    }
+    let comps = phys_parent
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    Determination::Known(Some(comps))
+}
+
+/// [`resolve_parents`] with the physical `..` semantics of an ABSOLUTE path:
+/// before a `..` is folded away lexically, the prefix before it is resolved
+/// physically ([`physical_parent`]); a path whose prefix cannot be read is
+/// `Undetermined` (restrictive for every caller that asks). A relative path
+/// has no base here and is folded lexically, as before.
+fn resolve_parents_det(s: &str) -> Determination<String> {
     if !has_unresolved_parent(s) {
         // Overwhelmingly the common case; also guarantees this function is a
         // no-op (byte for byte) on every path that has no `..` at all.
-        return s.to_string();
+        return Determination::Known(s.to_string());
     }
+    let lexical = match fold_parents(s, false) {
+        Determination::Known(l) => l,
+        undetermined => return undetermined,
+    };
+    if !s.starts_with('/') {
+        return Determination::Known(lexical);
+    }
+    let physical = match fold_parents(s, true) {
+        Determination::Known(p) => p,
+        undetermined => return undetermined,
+    };
+    // Keep the lexical SPELLING when both readings name the same file (macOS
+    // `/tmp/../etc/hosts` is `/private/etc/hosts` physically and `/etc/hosts`
+    // lexically — one file, and callers match on the spelling they know);
+    // use the physical one only where they really differ.
+    if lexical == physical || same_file_loose(&lexical, &physical) {
+        Determination::Known(lexical)
+    } else {
+        Determination::Known(physical)
+    }
+}
+
+/// True when both absolute paths resolve to the same place: each canonicalised
+/// at its deepest existing ancestor, the not-yet-existing tail kept as written.
+fn same_file_loose(a: &str, b: &str) -> bool {
+    fn loose(p: &str) -> String {
+        let mut tail: Vec<&str> = Vec::new();
+        let mut cur = p.trim_end_matches('/');
+        loop {
+            let probe = if cur.is_empty() { "/" } else { cur };
+            if let Ok(c) = std::fs::canonicalize(probe) {
+                let mut out = c.display().to_string();
+                for t in tail.iter().rev() {
+                    if !out.ends_with('/') {
+                        out.push('/');
+                    }
+                    out.push_str(t);
+                }
+                return out;
+            }
+            match cur.rsplit_once('/') {
+                Some((head, last)) => {
+                    tail.push(last);
+                    cur = head;
+                }
+                None => return p.to_string(),
+            }
+        }
+    }
+    loose(a) == loose(b)
+}
+
+/// Fold `..` out of `s`: lexically, or (`physical`, absolute paths) with the
+/// prefix before each `..` resolved on disk first ([`physical_parent`]).
+fn fold_parents(s: &str, physical: bool) -> Determination<String> {
     let absolute = s.starts_with('/');
     let trailing_slash = s.len() > 1 && s.ends_with('/');
-    let mut stack: Vec<&str> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
     for comp in s.split('/') {
         if comp.is_empty() || comp == "." {
             continue;
         }
         if comp == ".." {
+            if physical && absolute && !stack.is_empty() {
+                let refs: Vec<&str> = stack.iter().map(String::as_str).collect();
+                match physical_parent(&refs) {
+                    Determination::Known(Some(real)) => {
+                        stack = real;
+                        continue;
+                    }
+                    Determination::Known(None) => {}
+                    Determination::Undetermined(u) => return Determination::Undetermined(u),
+                }
+            }
             match stack.last() {
                 // Cancel a real component.
-                Some(last) if *last != ".." => {
+                Some(last) if last != ".." => {
                     stack.pop();
                 }
                 // At the root of an absolute path `..` is a no-op (POSIX).
                 None if absolute => {}
                 // Escaping a relative path: keep the `..` visible.
-                _ => stack.push(".."),
+                _ => stack.push("..".to_string()),
             }
             continue;
         }
-        stack.push(comp);
+        stack.push(comp.to_string());
     }
     let joined = stack.join("/");
     let mut out = if absolute {
@@ -446,7 +570,7 @@ fn resolve_parents(s: &str) -> String {
     if trailing_slash && !out.is_empty() && !out.ends_with('/') {
         out.push('/');
     }
-    out
+    Determination::Known(out)
 }
 
 /// Normalize a raw path/operand for matching: [`collapse`] the POSIX no-ops,
@@ -678,8 +802,14 @@ pub fn is_protected_path(path: &str) -> bool {
     if !collapsed.is_empty() && set.is_match(&collapsed) {
         return true;
     }
-    let resolved = resolve_parents(&collapsed);
-    !resolved.is_empty() && resolved != collapsed && set.is_match(&resolved)
+    match resolve_parents_det(&collapsed) {
+        Determination::Known(resolved) => {
+            !resolved.is_empty() && resolved != collapsed && set.is_match(&resolved)
+        }
+        // The `..` could not be resolved on disk: "not a gate file" was not
+        // established, so it is treated as one (CLAUDE.md §3).
+        Determination::Undetermined(_) => true,
+    }
 }
 
 /// True when `path` names the file `BLASTGUARD_ASK_RULES` points at (the
@@ -773,7 +903,10 @@ pub fn is_workflow_path(path: &str) -> bool {
             || l.contains("/.github/workflows/")
     }
     let collapsed = collapse(path);
-    hit(&collapsed) || hit(&resolve_parents(&collapsed))
+    match resolve_parents_det(&collapsed) {
+        Determination::Known(resolved) => hit(&collapsed) || hit(&resolved),
+        Determination::Undetermined(_) => true,
+    }
 }
 
 /// True when `path` names, or lexically contains, anything protected — the union
@@ -885,7 +1018,10 @@ pub fn holds_protected_paths(path: &str) -> bool {
         Determination::Undetermined(_) => return true,
     };
     let collapsed = collapse(path);
-    let resolved = resolve_parents(&collapsed);
+    let resolved = match resolve_parents_det(&collapsed) {
+        Determination::Known(r) => r,
+        Determination::Undetermined(_) => return true,
+    };
     for cand in [collapsed.as_str(), resolved.as_str()] {
         let trimmed = cand.trim_end_matches('/');
         if !trimmed.is_empty() && set.is_match(trimmed) {

@@ -6,7 +6,11 @@ use super::{
 
 // Backlog 606a93ab: the other-worktree discard verdict (user ruling
 // 2026-11-20), split out to keep this file under the file-growth limit.
+mod apply;
+pub(in crate::detect) mod argv;
+mod long_opt;
 mod other_worktree;
+mod rm;
 use other_worktree::{
     linked_checkout_is_clean, managed_discard, other_worktree_discard, ManagedWt,
 };
@@ -582,10 +586,15 @@ which removes untracked files from the working tree)";
 ///
 /// `seg` is the raw segment `rest` was whitespace-split from, when known; it is
 /// handed to the whole-tree-staging check only (see [`super::git_stage`]).
-pub(super) fn analyze_git(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
+pub(super) fn analyze_git(
+    rest: &[&str],
+    seg: Option<&str>,
+    env: &[&str],
+    ctx: &Ctx<'_>,
+) -> Decision {
     let head_end = git_subcommand_index(rest).map_or(rest.len(), |i| i + 1);
     let head_brace = rest[..head_end].iter().any(|w| has_brace_expansion(w));
-    let verdict = analyze_git_words(rest, seg, ctx);
+    let verdict = analyze_git_words(rest, seg, env, ctx);
     if head_brace && matches!(verdict, Decision::Allow) {
         return Decision::ask(HEAD_BRACE_REASON);
     }
@@ -1164,7 +1173,7 @@ fn config_argv_is_read(args: &[&str]) -> bool {
     }
 }
 
-fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
+fn analyze_git_words(rest: &[&str], seg: Option<&str>, env: &[&str], ctx: &Ctx<'_>) -> Decision {
     // Backlog fb338793: exec-capable shapes never reach the per-subcommand
     // arms (and so never the `_ => Allow` at the end). See `git_exec_ban`.
     if let Some(ban) = git_exec_ban(rest) {
@@ -1211,6 +1220,21 @@ fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decisio
     // dismantle the very thing its other verdicts rely on.
     if let Some(reason) = irreversible_git_subcommand(&sub, &rest[idx + 1..]) {
         return Decision::deny(reason);
+    }
+    // Backlog 96faed52: a path git itself writes (`--output=F`, `-o DIR`,
+    // `worktree add PATH`, `bundle create F`) goes through the same
+    // protected-path judgement as a `cp` destination. Only a non-Allow
+    // verdict is returned here; the per-subcommand arms below still run for
+    // everything else.
+    let write_verdict = super::fileops::write_targets::git_write_target_verdict(
+        ctx,
+        env,
+        &rest[..idx],
+        &sub,
+        &rest[idx + 1..],
+    );
+    if !matches!(write_verdict, Decision::Allow) {
+        return write_verdict;
     }
     match sub.as_str() {
         "clean" => {
@@ -1447,31 +1471,8 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
                 Decision::Allow
             }
         }
-        // Round 2: `git rm` had no arm, so `git rm .githooks/pre-commit`,
-        // `git rm -rf .githooks`, `git rm -r -f .claude` and
-        // `git rm --cached .claude/settings.json` all reached `_ => Allow`.
-        // `.githooks/**` is tracked in this repo, so `git rm` really does delete
-        // it from the working tree — the same one-command disarm as the
-        // already-denied `rm -rf .githooks`, spelled through git.
-        //
-        // `--cached` is denied too: it leaves the bytes on disk but removes the
-        // file from the repo, so the next clone/checkout has no gate. Ordinary
-        // targets are untouched (`git rm src/old.rs` stays Allow) — only the
-        // TARGET is classified, never the blast radius.
-        "rm" => {
-            for op in positional_operands(&rest[idx + 1..], &[]) {
-                if let Some(deny) = protected_disarm_deny(ctx, "git rm", op) {
-                    return deny;
-                }
-                if let Some(deny) = protected_tree_deny(ctx, "git rm", op) {
-                    return deny;
-                }
-                if let Some(deny) = protected_glob_deny("git rm operand", op) {
-                    return deny;
-                }
-            }
-            Decision::Allow
-        }
+        // `git rm`: protected targets and the recursive main-tree refusal (see rm.rs).
+        "rm" => rm::git_rm_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
         "restore" => {
             // `git restore <path>` / `git restore .` overwrites the working tree
             // from the index (or a source), discarding uncommitted changes — the
@@ -1657,6 +1658,9 @@ from the working tree)",
         // Backlog ef7c9fbe: a clone outside the managed places is Ask. See
         // `scratch_place`.
         "clone" => super::scratch_place::clone_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
+        // Backlog ea96e65d: `--directory` / `--unsafe-paths` move where the
+        // patch is written. See `git_apply_verdict`.
+        "apply" => apply::git_apply_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
         _ => Decision::Allow,
     }
 }

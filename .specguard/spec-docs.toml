@@ -80,6 +80,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'whole-tree staging は Ask': add_verdict / commit_verdict, git parse-options short-cluster and long-abbreviation reading, whole-tree pathspec predicate, and the cannot-determine -> Ask cases (backlog e9325654)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/fileops/write_targets.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '`>` 以外の書き込み先も保護設定判定に流す': git_write_target_verdict (git --output / -o / worktree add|move / bundle create / archive -o) and analyze_create (touch/mkdir through dangling symlinks), cannot-determine -> Ask (backlog 96faed52)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/system_paths.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'rm 以外のシステムファイル変更コマンドも system-harm Deny': system_mutation_verdict's per-command file lists, unquoting, home expansion and the Ask on unresolved expansions (backlog 3c750df2)."
@@ -998,3 +1003,43 @@ reason = "module list bullet `detect/ast/b5/closed_heredoc` (backlog 596ef57d, R
 path = "crates/blastguard/src/detect/ast/b5/sudo.rs"
 doc = "docs/specs/blastguard.md"
 reason = "B.5 sudo/doas unwrap (SUBSET.md Table B.3 `sudo`, `doas` row, user ruling 2026-11-20 Q1, Q3) and its sudo(8) long-option table (backlog a761b38f); a shell-mode (`-s`, `-i`, `--shell`, `--login`) wrapper followed by a command word takes the stricter of the direct-argv reading (never below Ask) and the verdict of the joined words judged as a shell body (backlog 8f8acf5e, user ruling 2026-11-21): `sudo -s 'rm -rf /etc'` is Deny, `sudo -s 'ls -la'` stays Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/ast/b5/driver_repo.rs"
+doc = "docs/specs/script-quarantine.md"
+reason = "§12 (user ruling 2026-11-28, backlog b6726716): in /flow driver sessions only, clean tracked files under the same repo's scripts/ (own worktree or main tree, matched by git common dir) are Allow via driver_trusted; `python3 -m pytest <f>` only when the whole scripts/ subtree is clean with no ignored pytest config, safe flags, read-only line and no PYTEST_* env; undetermined -> Deny; non-driver sessions keep Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/brace_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す' (backlog 66e7a741, 46145358): static comma groups outside quotes are expanded once at the segment word layer; >256 expanded words -> Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/high_blast.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す': analyze_high_blast_tier and high_blast_outside_tree_rm read the brace-expanded segment (backlog 66e7a741, 46145358)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/redirect/words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module 責務 bullet detect/redirect/words: single definition of a redirect word (operator / owns-next-word), zsh clobber >! second target candidate, redirect words stripped before git add / rm judgment (backlog ffa05737 D1/D2, 0e79c339 D3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git/long_opt.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象…' bullet 残り 7 shape ①: git unique-prefix long option resolution, Ambiguous resolved restrictively (backlog f63b97b3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git/argv.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '`>` 以外の書き込み先も保護設定判定に流す' 項 'git argv パーサ 1 本化': shared option-table parser (-- operands, unique long prefix, --no-X, clustered short, value options), unknown/ambiguous -> undetermined (backlog 4e7fc8e2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git/rm.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' item ⑤: `git rm -r` shared-main-tree refusal, options read with argv::parse, --cached / -n / --dry-run exempt, unreadable options refused (backlog f63b97b3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git/apply.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' bullet `git apply`: --directory value placed against cwd and judged as a write target, --unsafe-paths Ask, unplaceable value Ask (backlog ea96e65d)."

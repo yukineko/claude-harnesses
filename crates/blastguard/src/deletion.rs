@@ -417,6 +417,49 @@ pub fn judge_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> Ope
     judge_project_operand(scope, operand, cwd)
 }
 
+/// Why a recursive `git rm` of `operand` must not be waved through (backlog
+/// f63b97b3), or `None` when it is shown to touch no tracked file of a shared
+/// main working tree. `git rm -r src` deletes the same tracked files
+/// `rm -rf src` does, so it gets the same shared-main-tree answer
+/// ([`judge_project_operand`]); anything the probes cannot answer is a reason.
+pub fn git_rm_main_tree_refusal(
+    scope: &SafeRoots,
+    operand: &str,
+    cwd: Option<&str>,
+) -> Option<String> {
+    let Determination::Known(lexical) = scope.lexical_absolute(operand, cwd) else {
+        return Some(format!("`{operand}` is not a placeable path"));
+    };
+    let Some(real) = scope.resolve(&lexical) else {
+        return Some(format!("`{operand}` could not be resolved"));
+    };
+    let Some(probe) = scope.git_tree_probe() else {
+        return Some("no git probe in this session model".to_string());
+    };
+    let facts = match probe(&real, &build_candidates(&real)) {
+        Determination::Known(f) => f,
+        Determination::Undetermined(_) => {
+            return Some(format!("git could not tell what is at `{operand}`"));
+        }
+    };
+    if facts.tracked == 0 {
+        return None;
+    }
+    match &facts.shared_main_tree {
+        Determination::Known(false) => None,
+        Determination::Known(true) => Some(format!(
+            "`{real}` holds tracked files of the main working tree {}; work happens in a linked \
+worktree, so this delete is not shown to be disposable",
+            facts.toplevel
+        )),
+        Determination::Undetermined(u) => Some(format!(
+            "could not tell whether {} is the main working tree ({})",
+            facts.toplevel,
+            u.reason().as_str()
+        )),
+    }
+}
+
 /// Home-level / system refusals, then classes 4/5: the git work-tree path.
 fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) -> OperandJudgement {
     let lexical = match scope.lexical_absolute(operand, cwd) {
@@ -450,7 +493,30 @@ fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) ->
         );
     };
     let no_symlink = scope.no_symlink_below(&lexical, &top);
-    decide_project(&real, &top, no_symlink, &candidates, &facts)
+    let judged = decide_project(&real, &top, no_symlink, &candidates, &facts);
+    // Backlog ea96e65d / CLAUDE.md section 8: "recoverable from git" is not a
+    // licence to delete tracked files out of the shared MAIN working tree (a
+    // primary checkout with linked worktrees), which no session edits in place.
+    // A recursive delete of tracked paths there is not an Allow from this
+    // module; a probe that cannot answer is read the same way (restrictive).
+    if matches!(judged, OperandJudgement::Allow(_)) && facts.tracked > 0 {
+        match &facts.shared_main_tree {
+            Determination::Known(false) => {}
+            Determination::Known(true) => {
+                return OperandJudgement::NotAllowed(format!(
+                    "`{real}` holds tracked files of the main working tree {top}; work happens \
+in a linked worktree, so this delete is not shown to be disposable"
+                ));
+            }
+            Determination::Undetermined(u) => {
+                return OperandJudgement::NotAllowed(format!(
+                    "could not tell whether {top} is the main working tree ({})",
+                    u.reason().as_str()
+                ));
+            }
+        }
+    }
+    judged
 }
 
 /// Whether `real` is a system directory: `/`, or at / below a
@@ -638,6 +704,7 @@ mod tests {
             submodule: false,
             hidden_index_state: false,
             build_dirs: build.iter().map(|(a, b)| (a.to_string(), *b)).collect(),
+            shared_main_tree: Determination::known(false),
         }
     }
 

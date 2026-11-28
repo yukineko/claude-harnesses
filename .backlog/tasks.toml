@@ -820,6 +820,8 @@ notes = "Observed 2026-11-28, reason: git apply/am reads its patch through `<` (
 created_at = 1795842446
 updated_at = 1795842446
 weight = 0.0
+issue_number = 2022
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2022"
 rev = 0
 
 [task.repro]

@@ -836,3 +836,33 @@ exit 101: d in 0.58s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s
      Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-1d0f6662a14f81b8)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""
+
+[[task]]
+id = "f63b97b3"
+title = "blastguard detector: 7 protected-target shapes still Allow after ea96e65d (git apply --stat --apply / --dir= / cwd, quoted relative rm, mv of worktree-store parent, separate-git-dir main tree, git rm -r in main tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Independent verifier of ea96e65d (commit 18accae2f, crates/blastguard/tests/backlog_20261128_relative_protected_verifier.rs, 7 ignored REDs). git apply 3 shapes observed rewriting ~/.claude/settings.json with real git. (1) apply.rs returns Allow on any of --check/--stat/--numstat/--summary even when --apply follows; (2) --dir= abbreviation not recognised; (3) git apply run with cwd/-C inside ~/.claude not judged; (4) rm -f "settings.json" / 'settings.json' with cwd ~/.claude Allow (unquoted is Deny); (5) mv <home>/src (parent of .harness-worktrees) Allow; (6) shared_main_tree returns Known(false) when .git is a file (separate-git-dir primary); (7) git rm -r src in a shared main tree Allow. (5) and (7) expectation is the verifier's analogy - confirm when fixing."""
+created_at = 1795842815
+updated_at = 1795842815
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_relative_protected_verifier -- --ignored"
+rev = "6e0e6dec57cf3afea24246ff4f20e908a8a80303"
+observed_at = 1795842815
+detail = """
+exit 101:  passed; 7 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.11s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/backlog_20261128_relative_protected_verifier.rs (target/debug/deps/backlog_20261128_relative_protected_verifier-9bd61be8b48bcf3d)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_relative_protected_verifier`"""

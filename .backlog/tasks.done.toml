@@ -98316,3 +98316,68 @@ rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "76dd7aea"
+title = "blastguard: git push deleting a remote branch (:main / --delete main) is Allow while force push is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795827516
+updated_at = 1795830273
+weight = 0.0
+issue_number = 2009
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2009"
+issue_closed_at = 1795830276
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_push_delete_remote_branch -- --include-ignored"
+rev = "5e609cfbf869dc82cbf54192a1733db5dec0dfa5"
+observed_at = 1795827516
+detail = """
+exit 101: .2.985 (/Users/yuki/src/.harness-worktrees/red-push-delete-main/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-fc1a37257cbf6f54)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_push_delete_remote_branch`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_push_delete_remote_branch"
+exit = 0
+passed = 4
+rev = "366d46fc21ba994fb71f844306a7b2198c584d0a"
+observed_at = 1795830250
+output_digest = "sha256:4828073c2060ea4331552d6b22401c52649b45e0b33115972aeb935381b38fb9"
+excerpt = """
+
+running 5 tests
+test measure_table ... ignored, measurement table, not a contract
+test control_plain_push_stays_allow ... ok
+test control_force_push_main_is_ask_main_and_deny_subagent ... ok
+test delete_remote_main_is_ask_or_deny_in_main_mode ... ok
+test delete_remote_main_is_deny_in_subagent_mode ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+   Compiling blastguard v0.2.991 (/Users/yuki/src/.harness-worktrees/fix-push-delete/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.71s
+     Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-77af601ba8caeff1)
+"""
+
+[task.closure.red]
+rev = "986639d6c8ca9b1ff011054a8d0d611696c9559f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

@@ -98316,3 +98316,191 @@ rev = "bf45929ce572c7b6278debef025f8e9119b4f3c7"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "d805f80f"
+title = "blastguard fail-open: rm -rf /etc behind xcrun/watch/caffeinate/arch/chronic/script/unbuffer is Ask, not Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "system-harm",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830717
+updated_at = 1795830952
+weight = 0.0
+issue_number = 2011
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2011"
+issue_closed_at = 1795830954
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny -- --ignored"
+rev = "b6cc1720fdb0020b52cd92d1866165a08a3e3b31"
+observed_at = 1795830717
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s
+     Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-f48156f04a86cc88)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny"
+exit = 0
+passed = 3
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830951
+output_digest = "sha256:98cf9dc7a2e2fd158f06db84ba3bf62e968d9fc1d80fab67c15d1ab0e31e26ed"
+excerpt = """
+
+running 3 tests
+test control_bare_and_known_wrapper_system_harm_is_deny ... ok
+test control_wrapped_harmless_is_allow ... ok
+test wrapped_system_harm_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-d483324fe6f1751d)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "005d3a94"
+title = '''blastguard fail-open: quoted/escaped force refspec ("+main", '+x', \+x) in git push is Allow; bare +main is Ask/Deny'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830577
+updated_at = 1795830956
+weight = 0.0
+issue_number = 2010
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2010"
+issue_closed_at = 1795830960
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_quoted_force_refspec -- --ignored"
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+observed_at = 1795830577
+detail = """
+exit 101: (/Users/yuki/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.34s
+     Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-917395933581b067)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_quoted_force_refspec`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_quoted_force_refspec"
+exit = 0
+passed = 3
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830955
+output_digest = "sha256:e77295e7f67912d394b03d74c7a18e9451532edec4c1a1501d7ba1aedf054da5"
+excerpt = """
+
+running 3 tests
+test control_plain_push_and_system_harm ... ok
+test control_unquoted_force_refspec_is_ask_main_deny_subagent ... ok
+test quoted_force_refspec_is_never_weaker_than_unquoted ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-83dd356e96f1e4a4)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "3221b79b"
+title = "blastguard fail-open: xcrun/watch/caffeinate/arch/chronic/script/unbuffer wrapper makes main-tree git add -A Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795830761
+updated_at = 1795830962
+weight = 0.0
+issue_number = 2012
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2012"
+issue_closed_at = 1795830964
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage -- --ignored"
+rev = "cace36ec502ddc2ba753ed0b118b06bca6dbb120"
+observed_at = 1795830761
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261128_detector_wrapper_whole_tree_stage.rs (target/debug/deps/backlog_20261128_detector_wrapper_whole_tree_stage-e1147e0d3aa537be)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage"
+exit = 0
+passed = 4
+rev = "b08e089e47c9995e86d41c3c3281e79d44de8d8b"
+observed_at = 1795830961
+output_digest = "sha256:60dbaef0a0eef1c93367cc5317c1048a2387394e1c5a11ccf332e02ced813358"
+excerpt = """
+
+running 4 tests
+test control_bare_whole_tree_stage_is_ask ... ok
+test control_wrapped_explicit_path_stage_is_allow ... ok
+test wrapped_whole_tree_stage_in_main_tree_is_ask ... ok
+test control_wrapped_system_harm_is_refused ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_20261128_detector_wrapper_whole_tree_stage.rs (target/debug/deps/backlog_20261128_detector_wrapper_whole_tree_stage-461217a7c8df9acf)
+"""
+
+[task.closure.red]
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

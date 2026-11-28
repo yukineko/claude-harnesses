@@ -810,3 +810,36 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
      Running tests/verifier15_ask_learning_20261128.rs (target/debug/deps/verifier15_ask_learning_20261128-928863a99876b5c8)
 error: test failed, to rerun pass `-p blastguard --test verifier15_ask_learning_20261128`"""
+
+[[task]]
+id = "baa5a2c4"
+title = "blastguard detector Allows rm -rf of another container worktree and rm/Write of main-tree src via symlink or .. from a worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed by verifier16 round 16 (2026-11-28): rm -rf <other worktree>, and rm/Write reaching the main tree src through symlink or .. are detector Allow = destruction of main tree. Test: crates/blastguard/tests/verifier16_ask_learning_20261128.rs::r16_detector_allows_seen_in_round16. Ruling 2026-11-28 (merged/unneeded worktrees may be deleted) covers git worktree remove of merged/unneeded worktrees, not main-tree writes via symlink/.. nor rm -rf of arbitrary other worktrees; the container-ok ruling does not cover the main tree. System harm stays Deny."
+created_at = 1795856972
+updated_at = 1795856972
+weight = 0.0
+issue_number = 2027
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2027"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier16_ask_learning_20261128 r16_detector_allows_seen_in_round16 -- --ignored --exact"
+rev = "bbd6aa623ed3d7ec8d3e9f246429c574ffb8b723"
+observed_at = 1795856972
+detail = """
+exit 101: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.10s
+     Running tests/verifier16_ask_learning_20261128.rs (target/debug/deps/verifier16_ask_learning_20261128-89c90469bf8f4ef2)
+error: test failed, to rerun pass `-p blastguard --test verifier16_ask_learning_20261128`"""

@@ -603,7 +603,7 @@ fn r16_measure_worktree_remove_of_another_session() {
 /// CLAUDE.md §8). Expected: not Allow. Not caused by the diff under test
 /// (`shape.rs` classes feed only the askrules judge).
 #[test]
-#[ignore = "RED: detector — rm/Write of another container worktree root or the main tree via symlink/.. from a worktree is Allow; filed separately"]
+#[ignore = "RED(baa5a2c4): detector — rm/Write of another container worktree root or the main tree via symlink/.. from a worktree is Allow; filed separately"]
 fn r16_detector_allows_seen_in_round16() {
     let h = env_prod("detharm");
     std::os::unix::fs::symlink(&h.main, h.wt.join("m")).unwrap();

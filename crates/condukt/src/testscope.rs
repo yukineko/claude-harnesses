@@ -22,8 +22,8 @@
 //!    Bash `cargo test`, `bash -c`, `condukt sandbox run --cmd`, `tdd
 //!    red|green --cmd <c>` / `--cmd=<c>` (whose `<c>` is judged like a bare
 //!    command for every rule), and `condukt state test`, which calls
-//!    [`judge`] itself before running anything. Two exceptions to the
-//!    same-command key, both for `tdd green --cmd <c>` (any nesting depth):
+//!    [`judge`] itself before running anything. Exceptions to the
+//!    same-command key (a, b for `tdd green --cmd <c>`, any nesting depth; c for red):
 //!    (a) backlog 8f82f09d: it is checked only against earlier `tdd green`
 //!    runs of `<c>`, so a bare run cannot block the GREEN evidence the F->P
 //!    oracle requires; it still records `<c>`'s bare key, refusing a bare run
@@ -31,9 +31,10 @@
 //!    (b) backlog 0c301e8b: it is also checked against an earlier `tdd red
 //!    --cmd <c>` of `<c>`. On the same unchanged tree a confirmed red denies
 //!    the green, and a pending red asks (rule R3 of spec
-//!    `testscope-confirmed-run`), never allows it. A `tdd red --cmd <c>` is
-//!    checked against the bare key like a bare run, and records a red key
-//!    besides it (see `check_rerun`).
+//!    `testscope-confirmed-run`), never allows it. (c) backlog fb4f650d: a `tdd red
+//!    --cmd <c>` is checked only against earlier `tdd red` / `tdd green` runs
+//!    of `<c>` on the tree, not the bare key, so a bare run cannot block the
+//!    RED evidence; it records the bare key and a red key (see `check_rerun`).
 //! 4. **Task scope** (2026-11-14) — when the cwd is inside a run task's
 //!    recorded worktree, each `--test <name>` must appear as `--test <name>`
 //!    in that task's `reproduction_tests` or be a `tests/<name>.rs` the

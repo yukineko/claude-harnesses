@@ -11,12 +11,11 @@
 //!   running` must refuse (non-zero, status unchanged) when the marker of
 //!   `$CLAUDE_CODE_SESSION_ID` is absent, or when there is no session id.
 //! * **B** — `tdd red|green --cmd "<c>"` (also `--cmd=<c>`) is judged as if `<c>`
-//!   were a bare Bash command (full suite deny, same-tree rerun deny; `tdd
-//!   red` shares the bare ledger key in both directions). `tdd green` is the
-//!   one-way exception of backlog 8f82f09d: a bare run does not refuse a later
-//!   `tdd green` of `<c>`, but `tdd green` records `<c>`'s bare key, so a bare
-//!   run after it is refused, and a second `tdd green` of `<c>` (any nesting
-//!   depth) is refused. B here exercises `tdd red` across routes and `tdd
+//!   were a bare Bash command (full suite deny, same-tree rerun deny). `tdd
+//!   green` (backlog 8f82f09d) and `tdd red` (backlog fb4f650d) are one-way
+//!   exceptions: a bare run does not refuse a later `tdd green` / `tdd red` of
+//!   `<c>`, but each records `<c>`'s bare key, so a bare run after it is
+//!   refused, and a second `tdd green` of `<c>` (any nesting depth) is refused. B here exercises `tdd red` across routes and `tdd
 //!   green` twice; `condukt state test` consults the same rerun ledger inside
 //!   the binary.
 //! * **C** — inside a run task's recorded worktree, each `--test <name>` must be
@@ -411,15 +410,17 @@ fn b_tdd_full_suite_is_denied() {
     }
 }
 
+// test-weakening-justified: backlog fb4f650d (2026-11-28) reverses this pin; a bare
+// run must not block the RED proof the F->P oracle requires (mirror of 8f82f09d).
 #[test]
-fn b_tdd_after_bare_run_on_same_tree_is_denied() {
+fn b_tdd_red_after_bare_run_on_same_tree_is_allowed() {
     let env = Env::new();
     let r = repo();
     assert_allow(
         &hook_confirmed(&env, "s", "cargo test -p x --test t", r.path()),
         "first bare run",
     );
-    assert_deny(
+    assert_allow(
         &hook(
             &env,
             "s",

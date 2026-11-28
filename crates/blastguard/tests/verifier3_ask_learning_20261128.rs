@@ -111,9 +111,15 @@ fn table_with(e: &Env, name: &str, k: &str) -> PathBuf {
 /// Learn `sibling` allow; `probe` (a MAIN-tree write) must not become Allow.
 fn assert_no_ride_e(e: &Env, sibling: Value, probe: Value) {
     let before = decide(e, &no_table(e), &probe);
-    assert_ne!(before, "allow", "precondition: probe must not be Allow without a table");
+    assert_ne!(
+        before, "allow",
+        "precondition: probe must not be Allow without a table"
+    );
     let sib_shape = shape(e, &sibling);
-    assert_eq!(sib_shape["decision"], "ask", "precondition: sibling must Ask: {sib_shape}");
+    assert_eq!(
+        sib_shape["decision"], "ask",
+        "precondition: sibling must Ask: {sib_shape}"
+    );
     let k = sib_shape["shape"].as_str().unwrap().to_string();
     let t = table_with(e, "t.json", &k);
     let after = decide(e, &t, &probe);
@@ -158,7 +164,11 @@ fn wrapper_git_write_keeps_repo_class_main_tree() {
 
 #[test]
 fn wrapper_git_add_in_worktree_does_not_unlock_main_tree() {
-    assert_no_ride("wrapride", bash(WT, "env git add -A"), bash(MAIN, "env git add -A"));
+    assert_no_ride(
+        "wrapride",
+        bash(WT, "env git add -A"),
+        bash(MAIN, "env git add -A"),
+    );
 }
 
 /// Main-tree write reached through `cd ..`: the cwd is not resolved, the class
@@ -202,7 +212,10 @@ fn exported_git_dir_does_not_ride_worktree_class() {
 #[test]
 fn git_c_core_worktree_is_not_worktree_class() {
     let e = env("corewt");
-    let k = key(&e, &bash(WT, &format!("git -c core.worktree={MAIN} add -A")));
+    let k = key(
+        &e,
+        &bash(WT, &format!("git -c core.worktree={MAIN} add -A")),
+    );
     assert!(
         !k.contains("|s3-worktree|") && !k.contains("|s3-none|"),
         "`git -c core.worktree=<main>` must not take the worktree class: {k}"
@@ -277,7 +290,11 @@ fn script_rewritten_earlier_on_the_line_is_unpinned() {
     ] {
         let k = key(&e, &bash(WT, &cmd));
         assert!(
-            k.split(',').any(|v| v == "python3 ?"),
+            k.splitn(3, '|')
+                .nth(2)
+                .unwrap_or("")
+                .split(',')
+                .any(|v| v == "python3 ?"),
             "`{cmd}` rewrites {a} before running it, the run verb must be `python3 ?`: {k}"
         );
     }

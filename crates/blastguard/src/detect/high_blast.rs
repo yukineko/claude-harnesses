@@ -41,7 +41,17 @@ pub(super) fn analyze_high_blast_tier(cmd: &str) -> Decision {
     for view in compound_views(cmd) {
         // Quoted option words read as their unquoted twins (`'--force'` is
         // `--force`); an undetermined one is asked about by the segment pass.
-        let raw: Vec<&str> = view.command.split_whitespace().collect();
+        // The shell brace-expands before it runs (`git push {--force,origin}`).
+        let command = match super::brace_words::expanded_text(&view.command) {
+            Ok(c) => c,
+            Err(()) => {
+                if let Some(deny) = acc.record(super::brace_words::too_many_ask()) {
+                    return deny;
+                }
+                continue;
+            }
+        };
+        let raw: Vec<&str> = command.split_whitespace().collect();
         let option_words = super::option_words::OptionWords::new(&raw);
         let tokens = option_words.tokens();
         if tokens.is_empty() {
@@ -230,6 +240,10 @@ unqualified host/path to http://"
 /// — the recursive/wildcard guard below exists only so this function's own
 /// verdict is never wrong in isolation, not to prevent a double-count.
 pub(super) fn high_blast_outside_tree_rm(seg: &str) -> Option<Decision> {
+    let seg = match super::brace_words::expanded_text(seg) {
+        Ok(s) => s,
+        Err(()) => return Some(super::brace_words::too_many_ask()),
+    };
     let tokens: Vec<&str> = seg.split_whitespace().collect();
     let (head_tok, rest) = tokens.split_first()?;
     let cmd = normalized_command(head_tok);

@@ -111,7 +111,6 @@ fn control_harmless_command_position_brace_is_not_deny() {
 }
 
 #[test]
-#[ignore = "RED(46145358): pending"]
 fn command_position_brace_system_harm_is_deny() {
     let fx = Fx::new();
     let bad: Vec<String> = BRACED

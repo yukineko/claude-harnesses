@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::protected::{protected_path_block, system_landing_block};
-use super::{exclude, unreadable_operand, Ctx, Decision};
+use super::{exclude, Ctx, Decision, UNREADABLE_OPERAND};
 
 fn extract_path(ti: Option<&Value>) -> Option<String> {
     let v = ti?;
@@ -79,4 +79,36 @@ pub(super) fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
         return deny;
     }
     Decision::Allow
+}
+
+/// Verdict for a call blastguard has jurisdiction over whose operand it could
+/// not extract.
+///
+/// # Why `Ask` and not `Allow`
+///
+/// This is the crate's own front door failing the test the crate exists to
+/// enforce. `model.rs:5` names the defect: a two-valued form "forced every
+/// construct blastguard cannot analyse into `Allow`, i.e. 'I don't understand
+/// this' was recorded as 'this is fine'". The 25-odd sub-analysers in this file
+/// were all converted to say `Ask` for constructs they cannot parse — but the
+/// entry points, where the input itself is unreadable, were left binary. An
+/// analyser that refuses to guess about a nested `$(...)` while its front door
+/// waves through a payload it could not parse at all is not fail-closed; it is
+/// fail-closed in the part that was looked at.
+///
+/// # Why `Ask` and not `Deny`
+///
+/// Same reason as [`protected_path_block`]: the unreadability is certain, the
+/// HARM is not. A payload shape blastguard does not recognise is usually a
+/// version skew between the hook and Claude Code, not an attack. `Ask` puts it
+/// to the human when one is present, and `Decision::hardened` collapses it to
+/// `Deny` in every headless/agent context where nobody can answer — so the
+/// autonomous threat model gets the strict answer either way.
+pub(super) fn unreadable_operand(tool: &str, field: &str) -> Decision {
+    Decision::ask(format!(
+        "{UNREADABLE_OPERAND} the operand of this {tool} call ({field} is \
+         missing, empty, or not a string), so it was never analysed — refusing \
+         to guess. If this recurs, blastguard's payload schema has drifted from \
+         what Claude Code sends and needs updating."
+    ))
 }

@@ -570,6 +570,19 @@ blastguard cannot tell whether it lands in a system directory, so it refuses to 
     }
 }
 
+/// A RELATIVE operand with a `..` component, joined onto the segment's absolute
+/// cwd, so [`exclude`]'s physical `..` resolution (which needs an absolute
+/// path) sees it: `hlink/../settings.json` is judged where the kernel lands it.
+/// `None` for an absolute path, one without `..`, or an unknown base (those
+/// keep their lexical verdict alone).
+fn cwd_joined_dotdot(ctx: &Ctx<'_>, path: &str) -> Option<String> {
+    if path.starts_with('/') || !path.split('/').any(|c| c == "..") {
+        return None;
+    }
+    let base = ctx.raw_base.as_deref().filter(|b| b.starts_with('/'))?;
+    Some(format!("{}/{path}", base.trim_end_matches('/')))
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -585,7 +598,8 @@ blastguard cannot tell whether it lands in a system directory, so it refuses to 
 /// decides whether the gates run" and "an agent made that file stop being read"
 /// are different recurring failures and want different signatures.
 pub(super) fn protected_disarm_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
+    let hit = |p: &str| exclude::is_protected_path(p) && !ctx.in_worktree_checkout(p);
+    if hit(path) || cwd_joined_dotdot(ctx, path).is_some_and(|abs| hit(&abs)) {
         Some(Decision::deny(format!(
             "{action} disarms a protected gate/config path ({path}) without writing to it — \
 it controls which hooks, gates or policies run, so blastguard refuses"
@@ -605,9 +619,11 @@ it controls which hooks, gates or policies run, so blastguard refuses"
 /// EVERYTHING under it — the protected paths are a subset of what goes, so there
 /// is nothing to guess about.
 pub(super) fn protected_tree_deny(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if (exclude::is_protected_path(path) || exclude::holds_protected_paths(path))
-        && !ctx.in_worktree_checkout(path)
-    {
+    let hit = |p: &str| {
+        (exclude::is_protected_path(p) || exclude::holds_protected_paths(p))
+            && !ctx.in_worktree_checkout(p)
+    };
+    if hit(path) || cwd_joined_dotdot(ctx, path).is_some_and(|abs| hit(&abs)) {
         Some(Decision::deny(format!(
             "{action} destroys a directory tree holding protected gate/config paths ({path}) — \
 it controls which hooks, gates or policies run, so blastguard refuses"

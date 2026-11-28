@@ -141,7 +141,6 @@ fn control_harmless_braces_are_allow() {
 }
 
 #[test]
-#[ignore = "RED(66e7a741): pending"]
 fn braced_destructive_git_flag_matches_expanded_verdict() {
     let fx = Fx::new();
     let bad: Vec<String> = CASES

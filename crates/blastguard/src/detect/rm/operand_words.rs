@@ -252,6 +252,53 @@ fn close_quote(w: &[char], from: usize, q: char, backslash_escapes: bool) -> Res
 /// Bash brace expansion of one word (quote-aware). Comma groups expand;
 /// sequence groups become `*`; any other `{…}` stays literal.
 fn brace_expand(w: Vec<char>) -> Result<Vec<Vec<char>>, String> {
+    brace_expand_with(w, true)
+}
+
+/// Marker error of [`brace_expand_with`] with `seq_as_glob == false`: the word
+/// holds a sequence group (`{a..c}`), which that mode does not expand.
+const SEQUENCE_GROUP: &str = "sequence brace group";
+
+/// Outcome of [`expand_braces_in_word`].
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::detect) enum BraceWord {
+    /// No brace group changes the word (none, a literal `{x}`, a quoted one, a
+    /// sequence group, or unbalanced quoting that belongs to a neighbouring
+    /// token): the word stands as written.
+    Unchanged,
+    /// The words the shell passes in this word's place, in order, each still
+    /// carrying its quoting.
+    Words(Vec<String>),
+    /// The expansion exceeds the bound: what the shell passes is not
+    /// established.
+    TooMany,
+}
+
+/// Bash brace expansion of ONE raw (still quoted) shell word, for the segment
+/// word layer ([`crate::detect`]'s `analyze_segment`): comma lists expand,
+/// nested and repeated; quoted and escaped braces do not. The expansion is the
+/// text the shell would hand the command, so command-position words
+/// (`{rm,-rf}`) and flag words (`git reset {--hard,HEAD}`) are seen by every
+/// detector as they will be run.
+pub(in crate::detect) fn expand_braces_in_word(word: &str) -> BraceWord {
+    if !word.contains('{') {
+        return BraceWord::Unchanged;
+    }
+    match brace_expand_with(word.chars().collect(), false) {
+        Ok(words) => {
+            let words: Vec<String> = words.into_iter().map(|w| w.into_iter().collect()).collect();
+            if words.len() == 1 && words[0] == word {
+                BraceWord::Unchanged
+            } else {
+                BraceWord::Words(words)
+            }
+        }
+        Err(why) if why.starts_with("brace expansion exceeds") => BraceWord::TooMany,
+        Err(_) => BraceWord::Unchanged,
+    }
+}
+
+fn brace_expand_with(w: Vec<char>, seq_as_glob: bool) -> Result<Vec<Vec<char>>, String> {
     let mut done: Vec<Vec<char>> = Vec::new();
     let mut todo: Vec<(Vec<char>, usize)> = vec![(w, 0)];
     while let Some((w, start)) = todo.pop() {
@@ -292,7 +339,10 @@ fn brace_expand(w: Vec<char>) -> Result<Vec<Vec<char>>, String> {
                 let mut bounds = vec![i];
                 bounds.extend(&commas);
                 bounds.push(close);
-                for pair in bounds.windows(2) {
+                // Pushed last-first so the stack pops them in WRITTEN order:
+                // the segment word layer needs bash's word order
+                // (`{rm,-rf}` is `rm -rf`, not `-rf rm`).
+                for pair in bounds.windows(2).rev() {
                     let mut n = prefix.to_vec();
                     n.extend_from_slice(&w[pair[0] + 1..pair[1]]);
                     n.extend_from_slice(suffix);
@@ -303,6 +353,9 @@ fn brace_expand(w: Vec<char>) -> Result<Vec<Vec<char>>, String> {
             }
             let body: String = w[i + 1..close].iter().collect();
             if is_sequence(&body) {
+                if !seq_as_glob {
+                    return Err(SEQUENCE_GROUP.to_string());
+                }
                 let mut n = prefix.to_vec();
                 n.push('*');
                 let resume = n.len();

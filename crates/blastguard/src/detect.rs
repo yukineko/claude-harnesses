@@ -63,6 +63,7 @@ mod ast;
 pub(crate) use ast::s5::S5_EFFECT_PREFIX;
 pub(crate) use ast::{DENY_TARGET, TABLE_B_UNDETERMINED, TABLE_B_UNRESOLVED};
 mod backtick_text;
+mod brace_words;
 mod budget;
 mod compound;
 mod condukt;
@@ -117,7 +118,7 @@ use budget::{depth_exhausted, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES, MAX_SHELL_DEP
 
 pub(crate) use condukt::AUTONOMY_SELF_GRANT;
 use denoise::denoised_eval_rescan;
-use file_tool::{detect_edit, detect_write};
+use file_tool::{detect_edit, detect_write, unreadable_operand};
 use gh::analyze_gh;
 use readings::detect_bash_every_reading;
 
@@ -562,38 +563,6 @@ pub(crate) const UNREADABLE_OPERAND: &str = "blastguard could not read";
 /// `two_unknown_wrappers_are_not_safer_than_one` pins it — a reword that broke
 /// the match fails a test rather than failing open.
 pub(crate) const UNKNOWN_VERB_ASK: &str = "is not a command blastguard recognises";
-
-/// Verdict for a call blastguard has jurisdiction over whose operand it could
-/// not extract.
-///
-/// # Why `Ask` and not `Allow`
-///
-/// This is the crate's own front door failing the test the crate exists to
-/// enforce. `model.rs:5` names the defect: a two-valued form "forced every
-/// construct blastguard cannot analyse into `Allow`, i.e. 'I don't understand
-/// this' was recorded as 'this is fine'". The 25-odd sub-analysers in this file
-/// were all converted to say `Ask` for constructs they cannot parse — but the
-/// entry points, where the input itself is unreadable, were left binary. An
-/// analyser that refuses to guess about a nested `$(...)` while its front door
-/// waves through a payload it could not parse at all is not fail-closed; it is
-/// fail-closed in the part that was looked at.
-///
-/// # Why `Ask` and not `Deny`
-///
-/// Same reason as [`protected_path_block`]: the unreadability is certain, the
-/// HARM is not. A payload shape blastguard does not recognise is usually a
-/// version skew between the hook and Claude Code, not an attack. `Ask` puts it
-/// to the human when one is present, and `Decision::hardened` collapses it to
-/// `Deny` in every headless/agent context where nobody can answer — so the
-/// autonomous threat model gets the strict answer either way.
-fn unreadable_operand(tool: &str, field: &str) -> Decision {
-    Decision::ask(format!(
-        "{UNREADABLE_OPERAND} the operand of this {tool} call ({field} is \
-         missing, empty, or not a string), so it was never analysed — refusing \
-         to guess. If this recurs, blastguard's payload schema has drifted from \
-         what Claude Code sends and needs updating."
-    ))
-}
 
 // ---------------------------------------------------------------------------
 // Bash handling
@@ -1371,6 +1340,12 @@ through it, and refuses to guess"
 /// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
 /// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
+    // The shell brace-expands before it runs anything: judge the expanded word
+    // list (backlog 66e7a741, 46145358). The one place; see `brace_words`.
+    let braces = brace_words::expand_segment(seg);
+    if let brace_words::SegmentBraces::Expanded(expanded) = &braces {
+        return analyze_segment(expanded, depth, line, seg_idx, ctx);
+    }
     let raw_tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     // Every rule below reads quoted option words as their unquoted twins
     // (`'--output=/x'` is `--output='/x'`); see `option_words`.
@@ -1379,6 +1354,9 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     let mut acc = VerdictAcc::default();
     if let Some(ask) = option_words.undetermined() {
         let _ = acc.record(ask);
+    }
+    if matches!(braces, brace_words::SegmentBraces::TooMany) {
+        let _ = acc.record(brace_words::too_many_ask());
     }
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that

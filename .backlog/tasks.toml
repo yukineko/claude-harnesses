@@ -758,6 +758,8 @@ notes = "Measured on main b19e77851 (RED tests committed e897078e0/eebe13572, cr
 created_at = 1795840960
 updated_at = 1795840960
 weight = 0.0
+issue_number = 2020
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2020"
 rev = 0
 
 [task.repro]

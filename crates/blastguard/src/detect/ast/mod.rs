@@ -360,6 +360,11 @@ pub(crate) struct Script {
     /// definitions included). Always empty from [`analyze`]. A command whose
     /// index is in none of them is not in a function body.
     pub function_body_ranges: Vec<Range<usize>>,
+    /// The raw text of every word the shell word-splits and pathname-expands
+    /// (argv words, `for`/`select` lists, redirect targets), of the nested
+    /// commands too. NOT assignment values, `case` / `[[ ]]` operands or
+    /// here-document bodies, which are not pathname-expanded.
+    pub field_words: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

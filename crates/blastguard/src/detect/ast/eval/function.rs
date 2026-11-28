@@ -137,10 +137,12 @@ fn run_once(
         function_body_ranges: Vec::new(),
         function_depth: 0,
         local_trust: LocalTrust::new(trust),
+        field_words: Vec::new(),
     };
     ev.program(&text, program, Env::initial(), &Context::TopLevel)?;
     let script = Script {
         commands: ev.out,
+        field_words: ev.field_words,
         function_names: ev.function_names,
         has_function_definition: ev.has_function_definition,
         function_body_ranges: ev.function_body_ranges,
@@ -149,6 +151,17 @@ fn run_once(
 }
 
 impl Ev {
+    /// `text.word_origin(w)`, recording the raw text of every word evaluated
+    /// in [`Mode::Field`] (argv, a `for`/`select` list, a redirect target, a
+    /// `cd` operand): the words a shell word-splits and pathname-expands.
+    /// Recorded in dry passes too.
+    pub(super) fn word_origin_noting(&mut self, text: &Text, w: &ast::Word, mode: Mode) -> Origin {
+        if mode == Mode::Field {
+            self.field_words.push(w.value.clone());
+        }
+        text.word_origin(w)
+    }
+
     pub(super) fn function_def(
         &mut self,
         text: &Text,

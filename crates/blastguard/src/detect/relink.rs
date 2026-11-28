@@ -327,48 +327,101 @@ pub(super) fn line_names_relink_verb(line: &str) -> bool {
         || zsh_runs_code(line)
 }
 
-/// Whether `text` holds a zsh construct that runs code while a word is
-/// expanded, wherever the word stands (argv, `cd` operand, redirect word,
-/// `for`/`select`/`case` header): outside every quote a glob qualifier
-/// `(e…)` / `(+…)` glued to a word, or `=(`; outside single quotes the `(e)`
-/// parameter flag `${(…e…)…}`. One helper for every user ([`word_is_inert`],
-/// [`line_is_relink_data`], [`relinked`], [`line_names_relink_verb`]). It
+/// Whether any word of `line` that the shell pathname-expands (argv, `cd`
+/// operand, redirect target, `for`/`select` list — read from the AST, not
+/// from the text) may run code in zsh ([`word_evaluates`]). An AST that
+/// cannot list the words is read word by word over the raw text. One
+/// judgement for every user ([`line_is_relink_data`], [`relinked`],
+/// [`line_names_relink_verb`]; [`word_is_inert`] uses [`word_evaluates`]). It
 /// over-approximates (a bash line with such text is read the same), which
 /// only adds Asks (CLAUDE.md §3).
-fn zsh_runs_code(text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
-    for (i, &c) in chars.iter().enumerate() {
-        if escaped {
-            escaped = false;
+fn zsh_runs_code(line: &str) -> bool {
+    // Cheap pre-filter: every construct below holds a `(` or a `~`.
+    if !line.contains(['(', '~']) {
+        return false;
+    }
+    match super::ast::analyze(line) {
+        // Only the words the shell pathname-expands are read: not a
+        // here-document body, an assignment's right side (`arr=(a b)`) or a
+        // `[[ =~ ]]` operand, which zsh never globs.
+        super::ast::Analysis::Known(script) => script.field_words.iter().any(|w| word_evaluates(w)),
+        // The words cannot be listed: read every blank-separated piece.
+        super::ast::Analysis::Undetermined(_) => line.split_whitespace().any(word_evaluates),
+    }
+}
+
+/// Whether the shell word `raw` (as written) may run code while it is
+/// expanded in zsh: outside quotes a `(` that is not the first character of
+/// the word and not the opener of a `$( )` / `<( )` / `>( )` substitution
+/// (a glob qualifier `(…)` of ANY spelling — `(e`, `(.e`, `(Ne`, `(#qe` — or
+/// the `(` of a word-leading `=(`); `$~` / `${~` (GLOB_SUBST) outside single
+/// quotes; a flagged expansion `${(…)` outside single quotes. A substitution
+/// body is skipped: its commands are words of their own in the script.
+fn word_evaluates(raw: &str) -> bool {
+    let chars: Vec<char> = raw.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if in_s {
+            in_s = c != '\'';
+            i += 1;
             continue;
         }
-        let next = chars.get(i + 1).copied();
         match c {
-            '\\' if !in_s => escaped = true,
-            '\'' if !in_d => in_s = !in_s,
-            '"' if !in_s => in_d = !in_d,
-            '=' if !in_s && !in_d && next == Some('(') => return true,
-            '(' if !in_s && !in_d && matches!(next, Some('e' | '+')) => {
-                // `(e`/`(+` at the start of a word is a subshell (`(echo x)`);
-                // glued to a word it is a glob qualifier.
-                let prev = i.checked_sub(1).and_then(|p| chars.get(p)).copied();
-                if prev.is_some_and(|p| !p.is_whitespace() && !";&|(<>$".contains(p)) {
-                    return true;
+            '\\' => i += 1,
+            '\'' if !in_d => {
+                in_s = true;
+                // `$'…'`: a backslash escapes inside it.
+                if i > 0 && chars[i - 1] == '$' {
+                    i += 1;
+                    while i < chars.len() && chars[i] != '\'' {
+                        i += if chars[i] == '\\' { 2 } else { 1 };
+                    }
+                    in_s = false;
                 }
             }
-            '$' if !in_s && next == Some('{') && chars.get(i + 2) == Some(&'(') => {
-                let flags: String = chars[i + 3..].iter().take_while(|&&f| f != ')').collect();
-                // Flags up to the `)`; no closing `)` is undetermined too.
-                let closed = chars[i + 3..].contains(&')');
-                if !closed || flags.contains('e') {
-                    return true;
+            '"' => in_d = !in_d,
+            '`' => {
+                i += 1;
+                while i < chars.len() && chars[i] != '`' {
+                    i += if chars[i] == '\\' { 2 } else { 1 };
+                }
+            }
+            '$' if next == Some('~') => return true,
+            '$' if next == Some('{') && matches!(chars.get(i + 2), Some('~' | '(')) => return true,
+            '$' | '<' | '>' if !in_d && next == Some('(') || c == '$' && next == Some('(') => {
+                i = skip_parens(&chars, i + 1);
+                continue;
+            }
+            '(' if !in_d && i > 0 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Index just past the `)` matching the `(` at `open` (the end when none).
+fn skip_parens(chars: &[char], open: usize) -> usize {
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
                 }
             }
             _ => {}
         }
+        i += 1;
     }
-    false
+    chars.len()
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)
@@ -855,7 +908,7 @@ const GIT_NO_WORKTREE_ENTRY: &[&str] = &["commit", "add", "status"];
 /// `#`, `=`, quotes). Undetermined is not inert.
 fn word_is_inert(w: &super::ast::Word) -> bool {
     use super::ast::{Quoting, Value};
-    if zsh_runs_code(&w.raw) {
+    if word_evaluates(&w.raw) {
         return false;
     }
     if !matches!(w.value, Value::Literal(_)) {

@@ -252,7 +252,6 @@ const FP_HEREDOC_CODE_BODY: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: CONFIRMED-FP 3de4729f r3 — zsh_runs_code reads here-document body text (`f(e`, `=(`) as code; Allow at base cf33a5b2c, Ask at 0cda717c2"]
 fn fp_heredoc_code_body_with_paren_e_is_allow() {
     let fx = fixture("fp-hd");
     expect(
@@ -273,7 +272,6 @@ const FP_ARRAY_AND_REGEX: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: CONFIRMED-FP 3de4729f r3 — `x=(…)` array assignment and `=~ ^(e…)` regex read as `=( )` / glob qualifier; Allow at base cf33a5b2c, Ask at 0cda717c2"]
 fn fp_array_assignment_and_regex_are_allow() {
     let fx = fixture("fp-arr");
     expect(
@@ -342,7 +340,6 @@ fn failopen_cd_compound_qualifier(s: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: CONFIRMED-failopen 3de4729f r3 — `cd *(.e:…)` / `(Ne` / `(-e` / `(^e` / `(oe`: zsh_runs_code checks only the letter after `(`; Ask at base cf33a5b2c, Allow at 0cda717c2"]
 fn failopen_cd_compound_qualifier_stays_not_allow() {
     let fx = fixture("fo-cd");
     expect(
@@ -364,7 +361,6 @@ fn failopen_glob_subst(s: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: CONFIRMED-failopen 3de4729f r3 (pre-existing) — zsh `${~X}` / `$~X` globs a quoted qualifier held in a variable; Allow at base cf33a5b2c and 0cda717c2"]
 fn failopen_glob_subst_stays_not_allow() {
     let fx = fixture("fo-subst");
     expect(
@@ -385,7 +381,6 @@ fn failopen_hash_q(s: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: CONFIRMED-failopen 3de4729f r3 (pre-existing) — `(#qe:…:)` explicit qualifier under extendedglob; Allow at base cf33a5b2c and 0cda717c2"]
 fn failopen_hash_q_stays_not_allow() {
     let fx = fixture("fo-hashq");
     expect(
@@ -447,7 +442,6 @@ fn failopen_for_redirect_compound(s: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: CONFIRMED-failopen 3de4729f r3 (pre-existing) — `for i in *(.e:…)` / `cat < *(.e:…)` compound qualifier; Allow at base cf33a5b2c and 0cda717c2"]
 fn failopen_for_redirect_compound_qualifier_stays_not_allow() {
     let fx = fixture("fo-forredir");
     expect(

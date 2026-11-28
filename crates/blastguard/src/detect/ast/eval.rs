@@ -675,8 +675,7 @@ struct Ev {
     /// One slot per enclosing loop: the join of the states at `break` /
     /// `continue`.
     accums: Vec<Option<Env>>,
-    /// Whether a function definition is evaluated (`function.rs`) instead of
-    /// being `Unsupported`.
+    /// Whether a function definition is evaluated (`function.rs`), not `Unsupported`.
     function_defs: bool,
     /// Names of the function definitions evaluated in emit mode, deduplicated.
     function_names: Vec<String>,
@@ -690,6 +689,7 @@ struct Ev {
     function_depth: usize,
     /// Whether a body's static `local` binds (`eval/function.rs`).
     local_trust: function::LocalTrust,
+    field_words: Vec<String>,
 }
 
 impl Ev {
@@ -1760,7 +1760,7 @@ impl Ev {
         mode: Mode,
         env: &mut Env,
     ) -> Result<Word, Cause> {
-        let origin = text.word_origin(w);
+        let origin = self.word_origin_noting(text, w, mode);
         let (value, quoting) = self.eval_word(&origin, &w.value, mode, env)?;
         Ok(Word {
             raw: w.value.clone(),

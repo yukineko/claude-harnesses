@@ -909,3 +909,34 @@ warning: `blastguard` (lib) generated 1 warning
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.95s
      Running tests/verifier12_ask_learning_20261128.rs (target/debug/deps/verifier12_ask_learning_20261128-2a558c449cc35e1c)
 error: test failed, to rerun pass `-p blastguard --test verifier12_ask_learning_20261128`"""
+
+[[task]]
+id = "d5cd45de"
+title = "blastguard detector Allows rm -rf of own dir that holds another linked worktree checkout"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed by verifier13 (2026-11-28): rm -rf of a directory inside own worktree that contains another linked worktree checkout is detector Allow (destroys the other checkout). Test: crates/blastguard/tests/verifier13_ask_learning_20261128.rs::r13_rm_of_own_dir_holding_another_checkout. Ruling 2026-11-28 allows deleting merged/unneeded worktrees, but via worktree-removal semantics, not blind rm -rf of a containing dir whose merged state is unobserved."
+created_at = 1795857105
+updated_at = 1795857105
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test verifier13_ask_learning_20261128 r13_rm_of_own_dir_holding_another_checkout -- --ignored --exact"
+rev = "47600ab78e7615ff27d0648857a0ac90b8f5483c"
+observed_at = 1795857105
+detail = """
+exit 101:  `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `blastguard` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.22s
+     Running tests/verifier13_ask_learning_20261128.rs (target/debug/deps/verifier13_ask_learning_20261128-a1ab0af4cc8d46df)
+error: test failed, to rerun pass `-p blastguard --test verifier13_ask_learning_20261128`"""

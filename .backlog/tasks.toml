@@ -893,6 +893,8 @@ notes = "Observed by verifier12 (2026-11-28): git clean -fdx in an own worktree 
 created_at = 1795857068
 updated_at = 1795857068
 weight = 0.0
+issue_number = 2029
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2029"
 rev = 0
 
 [task.repro]

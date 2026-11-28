@@ -740,3 +740,33 @@ exit 101: -worktrees/red-relative-protected/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
      Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""
+
+[[task]]
+id = "4e7fc8e2"
+title = "blastguard detector: git/touch/mkdir write targets still reach protected or system paths (8 shapes after 96faed52)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Found by the independent verifier of 96faed52 (commit 879a21288, test crates/blastguard/tests/backlog_20261128_git_write_targets_verifier.rs, 8 ignored REDs, each shape observed writing with real git/touch). (1) --work-tree relative --output resolved from work tree but git resolves from process cwd; (2) format-patch -o <protected dir itself>; (3) worktree add into an existing empty protected dir; (4) stash show -p / reflog / alias --output; (5) git config --file/-f <protected>; (6) checkout-index --prefix=<protected>/; (7) git init / clone / --git-dir init under protected; (8) touch/mkdir into /etc, /System not routed through system_landing_block (cp is Deny). 4-8 were Allow already at 0.2.1005."
+created_at = 1795836857
+updated_at = 1795836857
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_git_write_targets_verifier -- --ignored"
+rev = "bd0ad1a08cd51d30b538612cf8dd44ffcd7cbb02"
+observed_at = 1795836857
+detail = """
+exit 101:  0 passed; 8 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-50f611af92b15e30)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_git_write_targets_verifier`"""

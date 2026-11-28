@@ -853,6 +853,8 @@ notes = """Independent verifier of ea96e65d (commit 18accae2f, crates/blastguard
 created_at = 1795842815
 updated_at = 1795842815
 weight = 0.0
+issue_number = 2023
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2023"
 rev = 0
 
 [task.repro]

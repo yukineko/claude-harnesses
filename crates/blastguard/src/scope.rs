@@ -1293,6 +1293,14 @@ its own real path, so its physical parent is not its lexical one"
         self.classify_against(&self.roots, operand, cwd)
     }
 
+    /// Whether the canonical absolute path `real` is a proper ANCESTOR of a
+    /// worktree storage root (backlog f63b97b3): moving or deleting it takes
+    /// the storage root, and every linked worktree in it, along.
+    pub fn holds_worktree_root(&self, real: &str) -> bool {
+        let prefix = format!("{}/", real.trim_end_matches('/'));
+        self.worktree_roots.iter().any(|r| r.starts_with(&prefix))
+    }
+
     /// Where does `operand` land relative to the WORKTREE STORAGE ROOTS?
     ///
     /// Identical resolution to [`SafeRoots::classify`] (literal-path check,

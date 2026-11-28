@@ -709,3 +709,34 @@ exit 101: .2.985 (/Users/yuki/src/.harness-worktrees/red-push-delete-main/crates
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
      Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-fc1a37257cbf6f54)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_push_delete_remote_branch`"""
+
+[[task]]
+id = "005d3a94"
+title = '''blastguard fail-open: quoted/escaped force refspec ("+main", '+x', \+x) in git push is Allow; bare +main is Ask/Deny'''
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795830577
+updated_at = 1795830577
+weight = 0.0
+issue_number = 2010
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2010"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_quoted_force_refspec -- --ignored"
+rev = "a97ad037123d498a29375acd4e28eb5d19942cb9"
+observed_at = 1795830577
+detail = """
+exit 101: (/Users/yuki/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.34s
+     Running tests/backlog_20261128_detector_quoted_force_refspec.rs (target/debug/deps/backlog_20261128_detector_quoted_force_refspec-917395933581b067)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_quoted_force_refspec`"""

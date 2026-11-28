@@ -450,7 +450,30 @@ fn judge_project_operand(scope: &SafeRoots, operand: &str, cwd: Option<&str>) ->
         );
     };
     let no_symlink = scope.no_symlink_below(&lexical, &top);
-    decide_project(&real, &top, no_symlink, &candidates, &facts)
+    let judged = decide_project(&real, &top, no_symlink, &candidates, &facts);
+    // Backlog ea96e65d / CLAUDE.md section 8: "recoverable from git" is not a
+    // licence to delete tracked files out of the shared MAIN working tree (a
+    // primary checkout with linked worktrees), which no session edits in place.
+    // A recursive delete of tracked paths there is not an Allow from this
+    // module; a probe that cannot answer is read the same way (restrictive).
+    if matches!(judged, OperandJudgement::Allow(_)) && facts.tracked > 0 {
+        match &facts.shared_main_tree {
+            Determination::Known(false) => {}
+            Determination::Known(true) => {
+                return OperandJudgement::NotAllowed(format!(
+                    "`{real}` holds tracked files of the main working tree {top}; work happens \
+in a linked worktree, so this delete is not shown to be disposable"
+                ));
+            }
+            Determination::Undetermined(u) => {
+                return OperandJudgement::NotAllowed(format!(
+                    "could not tell whether {top} is the main working tree ({})",
+                    u.reason().as_str()
+                ));
+            }
+        }
+    }
+    judged
 }
 
 /// Whether `real` is a system directory: `/`, or at / below a
@@ -638,6 +661,7 @@ mod tests {
             submodule: false,
             hidden_index_state: false,
             build_dirs: build.iter().map(|(a, b)| (a.to_string(), *b)).collect(),
+            shared_main_tree: Determination::known(false),
         }
     }
 

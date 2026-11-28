@@ -1023,6 +1023,9 @@ fn copy_move_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>, args: &CopyArgs<'_
             if let Some(deny) = protected_glob_deny("mv source", src) {
                 return deny;
             }
+            if let Some(ask) = super::protected::worktree_move_ask(ctx, "mv source", src) {
+                return ask;
+            }
             // Round 2: `find … -exec mv {} /tmp/ \;` re-analyses to the tail
             // `mv {} /tmp/`, whose source operand is the literal placeholder
             // `{}` — a path known only to `find` at run time. Matching it

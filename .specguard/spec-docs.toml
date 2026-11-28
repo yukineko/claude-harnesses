@@ -1013,3 +1013,8 @@ reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展�
 path = "crates/blastguard/src/detect/high_blast.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'segment の語は shell と同じく brace 展開してから各 detector に渡す': analyze_high_blast_tier and high_blast_outside_tree_rm read the brace-expanded segment (backlog 66e7a741, 46145358)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git/apply.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' bullet `git apply`: --directory value placed against cwd and judged as a write target, --unsafe-paths Ask, unplaceable value Ask (backlog ea96e65d)."

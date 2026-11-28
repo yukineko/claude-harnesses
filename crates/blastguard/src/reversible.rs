@@ -353,6 +353,9 @@ pub struct TreeGitFacts {
     /// (tracked paths are never reported ignored by `check-ignore`).
     /// Candidates outside `toplevel` are omitted.
     pub build_dirs: Vec<(String, bool)>,
+    /// `toplevel` is the shared main tree of a repository that has linked
+    /// worktrees (see `shared_main_tree`); `Undetermined` = could not be told.
+    pub shared_main_tree: Determination<bool>,
 }
 
 /// The injected form of [`probe_tree`], so [`crate::scope::SafeRoots`] can
@@ -580,6 +583,7 @@ pub(crate) fn probe_tree_with_timeout(
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         }
     }
+    let shared = shared_main_tree(&toplevel);
     Determination::known(TreeGitFacts {
         toplevel,
         status,
@@ -587,7 +591,36 @@ pub(crate) fn probe_tree_with_timeout(
         submodule,
         hidden_index_state,
         build_dirs,
+        shared_main_tree: shared,
     })
+}
+
+/// Whether the work-tree root `top` is the SHARED main tree of a repository
+/// worked on through linked worktrees (backlog ea96e65d): a primary checkout
+/// (its `.git` is a DIRECTORY; a linked worktree has a `gitdir:` FILE) with at
+/// least one registered linked worktree (`.git/worktrees/<name>`). A lone
+/// checkout with no linked worktree is `Known(false)`. A stat / read failure
+/// other than "no `.git/worktrees` directory", and any unexpected `.git` type,
+/// is `Undetermined` — never `Known(false)`.
+fn shared_main_tree(top: &str) -> Determination<bool> {
+    let git = Path::new(top).join(".git");
+    let meta = match std::fs::symlink_metadata(&git) {
+        Ok(m) => m,
+        Err(e) => {
+            return Determination::undetermined(format!("could not stat `.git` of {top}: {e}"))
+        }
+    };
+    if meta.is_file() {
+        return Determination::known(false);
+    }
+    if !meta.is_dir() {
+        return Determination::undetermined("`.git` is neither a directory nor a file");
+    }
+    match harness_core::boundary::read_dir_entries_checked(&git.join("worktrees")) {
+        Determination::Known(None) => Determination::known(false),
+        Determination::Known(Some(entries)) => Determination::known(!entries.is_empty()),
+        Determination::Undetermined(u) => Determination::Undetermined(u),
+    }
 }
 
 /// What the index holds at a path that does NOT exist on disk, for the

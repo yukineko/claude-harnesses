@@ -93,6 +93,16 @@ pub fn shape_of(
             (vec![tool.to_string()], targets)
         }
     };
+    // A git write whose repository was named but is not shown to be a main or
+    // a linked working tree (a nonexistent / non-repo directory, `-C ../`)
+    // is not determined either: the verb carries `?`, so the shape can learn
+    // a Deny but never an Allow (CLAUDE.md §3).
+    let mut verbs = verbs;
+    if targets.iter().any(
+        |t| matches!(t, Target::GitRepo(p) if class_of_repo(p, ctx) == TargetClass::Undetermined),
+    ) {
+        verbs.push(UNRESOLVED_VERB.to_string());
+    }
     Shape {
         rule_id: rule_id.to_string(),
         target_class: class_of(&targets, ctx),
@@ -298,26 +308,73 @@ fn absolute_of(raw: &str, ctx: &Ctx<'_>) -> Option<String> {
 /// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything not shown to be
 /// one of those is `Undetermined`.
 pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
-    match class_of_path(raw, ctx) {
-        c @ (TargetClass::System | TargetClass::ProtectedConfig | TargetClass::Scratchpad) => c,
-        _ => {
-            let Some(abs) = absolute_of(raw, ctx) else {
-                return TargetClass::Undetermined;
-            };
-            if abs.contains("/.condukt/worktrees/") || abs.contains("/.harness-worktrees/") {
-                return TargetClass::Worktree;
+    let Some(abs) = absolute_of(raw, ctx) else {
+        return TargetClass::Undetermined;
+    };
+    // The class of the tree the path REALLY is: a symlink under a scratchpad
+    // that points at the main working tree is the main tree.
+    let real = realpath(&abs);
+    let canon_tmp = ctx.tmpdir.and_then(realpath_existing);
+    let real_ctx = Ctx {
+        tmpdir: canon_tmp.as_deref().or(ctx.tmpdir),
+        ..*ctx
+    };
+    let lexical = class_of_path(raw, ctx);
+    let physical = class_of_path(&real, &real_ctx);
+    for c in [lexical, physical] {
+        if matches!(c, TargetClass::System | TargetClass::ProtectedConfig) {
+            return c;
+        }
+    }
+    if lexical == TargetClass::Scratchpad && physical == TargetClass::Scratchpad {
+        return TargetClass::Scratchpad;
+    }
+    if real.contains("/.condukt/worktrees/") || real.contains("/.harness-worktrees/") {
+        return TargetClass::Worktree;
+    }
+    match repo_kind(&real) {
+        RepoKind::Linked => TargetClass::Worktree,
+        RepoKind::Main => TargetClass::MainTree,
+        RepoKind::Unknown => TargetClass::Undetermined,
+    }
+}
+
+/// `p` with every symlink resolved: the canonical path of its nearest existing
+/// ancestor plus the (not yet existing) remainder. A path whose ancestors
+/// cannot be resolved is returned as written (its repository kind is then read
+/// from the spelling and is `Unknown` unless it is a real tree).
+fn realpath(p: &str) -> String {
+    let mut rest: Vec<&str> = Vec::new();
+    let mut cur = std::path::Path::new(p);
+    loop {
+        if let Ok(c) = std::fs::canonicalize(cur) {
+            let mut out = c;
+            for part in rest.iter().rev() {
+                out.push(part);
             }
-            match repo_kind(&abs) {
-                RepoKind::Linked => TargetClass::Worktree,
-                RepoKind::Main => TargetClass::MainTree,
-                RepoKind::Unknown => TargetClass::Undetermined,
+            return out
+                .to_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| p.to_string());
+        }
+        match (cur.file_name().and_then(|n| n.to_str()), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                cur = parent;
             }
+            _ => return p.to_string(),
         }
     }
 }
 
+fn realpath_existing(p: &str) -> Option<String> {
+    std::fs::canonicalize(p)
+        .ok()
+        .and_then(|c| c.to_str().map(str::to_string))
+}
+
 /// The evaluator's facts for the Bash command `command`; an undetermined
 /// evaluation yields [`undetermined_facts`].
-pub fn bash_facts(command: &str) -> Facts {
-    crate::detect::shape_facts(command).unwrap_or_else(undetermined_facts)
+pub fn bash_facts(command: &str, cwd: Option<&str>) -> Facts {
+    crate::detect::shape_facts(command, cwd).unwrap_or_else(undetermined_facts)
 }

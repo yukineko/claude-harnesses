@@ -427,7 +427,7 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
             tmpdir: tmpdir.as_deref(),
             scope: &scope,
         };
-        let facts = bash_command(input).map(|c| blastguard::shape::bash_facts(&c));
+        let facts = bash_command(input).map(|c| blastguard::shape::bash_facts(&c, ctx.cwd));
         let mut shape = blastguard::shape::shape_of(
             &input.tool_name,
             input.tool_input.as_ref(),

@@ -219,8 +219,16 @@ forge・condukt のスケジューラが再利用）。
   （`touch dlink`）は止まる（`touch -h`/`--no-dereference` は link 自身を変えるので字面のまま判定。
   `-d`/`-r`/`-t`/`-A`・`mkdir -m` の値は operand ではない）。判定不能は Ask: 値の無い write option、値が
   runtime 展開（`$`・backtick）または空、`-C` 等の directory が置けないときの相対 target。通常の
-  `git diff --output=out.patch`（worktree 内の plain file）は Allow のまま。**残余**: `git clone`/`init` の
-  宛先、`git checkout-index --prefix`、`git config --file` などは対象外（別 rule または未対応）。
+  `git diff --output=out.patch`（worktree 内の plain file）は Allow のまま。
+  **backlog 4e7fc8e2（write target を 1 つの lib に集約）**: `--output` は**任意の** git subcommand
+  （`stash show -p`・`reflog`・alias 経由・未知の subcommand）で書き込み先として扱う。`git config --file|-f F`
+  （`--get*`/`--list`/`get`/`list` の読み取り形は除く）、`git checkout-index --prefix=D/`、`git init [D]` /
+  `--separate-git-dir` / `--git-dir=D init`、`git clone SRC D` も対象。ディレクトリを作る/埋める target
+  （`format-patch -o`・`worktree add|move`・`--prefix`・`init`・`clone`）は dir 自身が保護 dir / 保護 path を
+  含む dir（`~/.claude`）/ system dir でも止める（`dir_block`）。相対 target は process cwd 起点で、
+  動かすのは `-C` だけ（`--work-tree` は cwd を動かさないので無視。実 git で観測）。`touch`/`mkdir` は
+  `/etc`・`/System` など system dir 下を `cp` と同じ Deny にする（`touch -h` は字面のみ）。
+  **残余**: `git clone URL`（宛先省略）の導出名は判定しない（別 rule の scratch 判定のみ）。
 - **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
   他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
   （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。

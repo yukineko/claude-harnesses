@@ -695,6 +695,8 @@ notes = "Observed on main f60cd1d6e (RED at ee9eca672): Allow for git diff/log/s
 created_at = 1795835829
 updated_at = 1795835829
 weight = 0.0
+issue_number = 2017
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2017"
 rev = 0
 
 [task.repro]

@@ -1,39 +1,4 @@
 [[task]]
-id = "987e3708"
-title = "blastguard FP candidate: echo rm -rf ./build | bash is Deny in main and subagent (non-system relative target)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p1",
-]
-touched_files = []
-status = "failed"
-notes = """
-Found by the independent test author of 8cadc78f (tests ddd587ad4). Ignored RED c06_rm_build in crates/blastguard/tests/backlog_20261120_8cadc78f_adversarial.rs asserts not-Deny. Compare with the verdict of plain rm -rf ./build when fixing.
-needs user ruling: worker (run-20261121-151141-59675) found no blastguard defect. On macOS c06's cwd is under std::env::temp_dir()=/private/var/... which is in SYSTEM_PREFIXES, so plain 'rm -rf ./build' is already Deny there and the piped form matches it verbatim. With cwd under /tmp: plain and piped both main=Ask, subagent=Deny (designed Ask->Deny rewrite), so c06's unhedged 'not Deny in both modes' contradicts the subagent policy. Options: (a) re-anchor c06 to 'piped not stricter than plain'; (b) close as false alarm; (c) policy change so confined relative rm is Allow. Controls written at f46f6c2fb (discarded with the task branch)."""
-created_at = 1795179825
-updated_at = 1795241732
-defer_until = 1795414532
-weight = 0.0
-issue_number = 1902
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1902"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_20261120_8cadc78f_adversarial -- --ignored c06_rm_build --exact"
-rev = "a1d9b98361992dc9c8f122030b2533aef461ef13"
-observed_at = 1795179825
-detail = """
-exit 101: st result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.63s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_20261120_8cadc78f_adversarial.rs (target/debug/deps/backlog_20261120_8cadc78f_adversarial-32f4534269472e76)
-error: test failed, to rerun pass `-p blastguard --test backlog_20261120_8cadc78f_adversarial`"""
-
-[[task]]
 id = "946ac873"
 title = "blastguard: sudo perl <<< 'print 1' (benign) is Ask in main but Deny in subagent; RED expects not-Deny (may be a test-expectation issue under the perl stdin Undetermined parity)"
 project = "/Users/yuki/src/harness"

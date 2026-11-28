@@ -604,13 +604,49 @@ fn c05_nested_harmless() {
     );
 }
 
+fn rank(d: &str) -> u8 {
+    match d {
+        "allow" => 0,
+        "ask" => 1,
+        _ => 2,
+    }
+}
+
+/// For both modes, with the same cwd, the piped form must not be stricter than
+/// the plain form (Allow < Ask < Deny). Returns the observed decisions.
+fn assert_piped_not_stricter(home: &Home, plain: &str, piped: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    for subagent in [false, true] {
+        let p = decide(plain, home, subagent);
+        let q = decide(piped, home, subagent);
+        seen.push(format!("subagent={subagent}: plain={p} piped={q}"));
+        assert!(
+            rank(&q) <= rank(&p),
+            "piped stricter than plain (subagent={subagent}): plain={p} piped={q}"
+        );
+    }
+    seen
+}
+
+/// Backlog 987e3708. Original assert (removed): `echo rm -rf ./build | bash`
+/// is not Deny in main and subagent. User ruling 2026-11-28, option (a):
+/// re-anchored to "piped is not stricter than plain `rm -rf ./build`".
+/// Reason: on macOS the cwd under `std::env::temp_dir()` is `/private/var/...`,
+/// a system prefix, so plain `rm -rf ./build` is itself Deny and piped matches.
 #[test]
-#[ignore = "backlog 987e3708 RED: possible FP: rm of ./build via echo|bash is Deny in main and subagent"]
 fn c06_rm_build() {
-    check(
-        r####"echo rm -rf ./build | bash"####,
-        "c06",
-        "not_deny",
-        "non-system rm target not Deny",
-    );
+    let home = unique_home("c06");
+    assert_piped_not_stricter(&home, "rm -rf ./build", "echo rm -rf ./build | bash");
+}
+
+/// Same property with a non-system cwd under /tmp (observed: plain and piped
+/// agree; main=Ask, subagent=Deny by the Ask->Deny rewrite).
+#[test]
+fn c06_rm_build_tmp_cwd() {
+    let dir = std::path::PathBuf::from("/tmp")
+        .join(format!("bg-8cadc78f-adv-c06tmp-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("wt")).unwrap();
+    let home = Home(dir);
+    let seen = assert_piped_not_stricter(&home, "rm -rf ./build", "echo rm -rf ./build | bash");
+    eprintln!("c06_tmp observed: {seen:?}");
 }

@@ -365,15 +365,69 @@ fn r2_inline_program_body_is_part_of_the_shape() {
     assert!(bad.is_empty(), "R2 violations:\n{}", bad.join("\n"));
 }
 
+/// A linked git worktree in a fresh tempdir under `/private/tmp/claude-askrules`
+/// (`std::env::temp_dir()` is under `/var/folders`, classed `system`). Its
+/// `git add -A` is an Allow-eligible Ask (ask_learning_contract.rs
+/// `LEARNABLE_CMD`), used here as the liveness control of the learned table.
+fn linked_worktree() -> (tempfile::TempDir, PathBuf) {
+    std::fs::create_dir_all("/private/tmp/claude-askrules").unwrap();
+    let d = tempfile::Builder::new()
+        .prefix("r2-live-")
+        .tempdir_in("/private/tmp/claude-askrules")
+        .unwrap();
+    let main = d.path().join("repo");
+    std::fs::create_dir_all(&main).unwrap();
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(&main)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "i"]);
+    let wt = d.path().join("wt");
+    git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
+    (d, wt)
+}
+
+/// Re-anchored 2026-11-28 (verifier round 6) to the ruling "an interpreter run
+/// (python3/perl/ruby/node, and `bash -c` / `sh -c` bodies) is never
+/// Allow-eligible": the property is now STRICTER than R2's "only the same body
+/// is learned". An allow entry learned for body A leaves body A itself an Ask,
+/// and body B an Ask. Controls: both bodies Ask without a table (the table is
+/// otherwise never consulted), and the same table is LIVE (an eligible shape's
+/// own entry in it is honoured), so the Ask of A is not a table that was never
+/// read.
 #[test]
 fn r2_allow_learned_for_one_body_leaves_another_body_ask() {
     let e = env("r2overlay");
+    let (_live_dir, live_wt) = linked_worktree();
+    let live = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": SID_A,
+        "cwd": live_wt,
+        "tool_name": "Bash",
+        "tool_input": { "command": "git add -A" },
+    });
+    assert_eq!(
+        decide(&e, &no_table(&e), &live),
+        "ask",
+        "fixture: the liveness control `git add -A` in a linked worktree must Ask without a table"
+    );
+    let k_live = key(&e, &live);
     let mut bad = vec![];
     for (label, a, b) in r2_cases() {
         let pa = bash(&a);
         let pb = bash(&b);
-        // Precondition: both bodies are Asks today (otherwise the learned table
-        // is never consulted and the case proves nothing).
+        // Control: both bodies are Asks without a table.
         for (which, cmd, p) in [("A", &a, &pa), ("B", &b, &pb)] {
             let d = decide(&e, &no_table(&e), p);
             assert_eq!(
@@ -382,19 +436,27 @@ fn r2_allow_learned_for_one_body_leaves_another_body_ask() {
             );
         }
         let ka = key(&e, &pa);
-        let t = table(&e, "r2.json", vec![allow_entry(&ka)]);
-        // Positive control: the overlay is live for body A itself.
-        let got_a = decide(&e, &t, &pa);
-        if got_a != "allow" {
+        let t = table(&e, "r2.json", vec![allow_entry(&ka), allow_entry(&k_live)]);
+        // Liveness control: the table is read and honoured for an eligible shape.
+        let got_live = decide(&e, &t, &live);
+        if got_live != "allow" {
             bad.push(format!(
-                "{label}: control failed, body A with its own allow entry is {got_a} (shape {ka:?})"
+                "{label}: control failed, the eligible shape {k_live:?} with its own allow \
+                 entry in the same table is {got_live}"
+            ));
+        }
+        let got_a = decide(&e, &t, &pa);
+        if got_a != "ask" {
+            bad.push(format!(
+                "{label}: body A is {got_a} under its OWN learned allow entry; an interpreter \
+                 run is never Allow-eligible (ruling 2026-11-28). A={ka:?}"
             ));
         }
         let got_b = decide(&e, &t, &pb);
         if got_b != "ask" {
             bad.push(format!(
-                "{label}: body B is {got_b} under an allow learned for body A; a changed \
-                 body must Ask again (R2). A={ka:?} B={:?}",
+                "{label}: body B is {got_b} under an allow learned for body A; it must stay \
+                 an Ask. A={ka:?} B={:?}",
                 key(&e, &pb)
             ));
         }

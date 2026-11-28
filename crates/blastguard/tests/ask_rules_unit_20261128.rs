@@ -160,9 +160,52 @@ fn unresolved_verb_never_matches_allow() {
     ));
 }
 
+/// `program` pins the exact `#<fnv1a64>` token of a verb. Re-anchored
+/// 2026-11-28 (verifier round 6): no tool that carries a program hash is
+/// Allow-eligible any more (interpreter runs, and since the round-6 ruling
+/// also `bash`/`sh` script FILES, whose content may change after learning), so
+/// the exact-match property is observed on the restrictive side (a `program`
+/// deny matches the same hash, not another), and the permissive side asserts
+/// that a matching `program` allow rule does NOT Allow a shell file run.
 #[test]
 fn flags_any_none_and_program() {
-    let rs = RuleSet::from_toml(
+    let d = RuleSet::from_toml(
+        r##"
+[[rule]]
+decision = "deny"
+reason = "this program"
+[rule.match]
+tool = "bash"
+program = "#26610971178c87de"
+class = ["worktree"]
+"##,
+    );
+    assert!(d.warnings().is_empty(), "{:?}", d.warnings());
+    let w = TargetClass::Worktree;
+    for tool in ["bash", "python3"] {
+        let d = RuleSet::from_toml(&format!(
+            "[[rule]]\ndecision = \"deny\"\nreason = \"p\"\n[rule.match]\ntool = {tool:?}\n\
+             program = \"#26610971178c87de\"\nclass = [\"worktree\"]\n"
+        ));
+        assert!(
+            matches!(
+                judge(&facts(w, &[&format!("{tool} -e #26610971178c87de")]), &[&d]),
+                Judgement::Deny(_)
+            ),
+            "{tool}: the same program hash matches"
+        );
+        assert_eq!(
+            judge(&facts(w, &[&format!("{tool} -e #0000000000000000")]), &[&d]),
+            Judgement::NoMatch,
+            "{tool}: another program hash does not match"
+        );
+        assert_eq!(
+            judge(&facts(w, &[&format!("{tool} -e")]), &[&d]),
+            Judgement::NoMatch,
+            "{tool}: a verb without a program does not match"
+        );
+    }
+    let shell_allow = RuleSet::from_toml(
         r##"
 [[rule]]
 decision = "allow"
@@ -171,7 +214,19 @@ reason = "x"
 tool = "bash"
 program = "#26610971178c87de"
 class = ["worktree"]
-
+"##,
+    );
+    assert!(shell_allow.allow_enabled(), "{:?}", shell_allow.warnings());
+    for v in ["bash -e #26610971178c87de", "bash #26610971178c87de"] {
+        let j = judge(&facts(w, &[v]), &[&shell_allow]);
+        assert!(
+            !is_allow(&j),
+            "`{v}`: a shell script file run is never Allow-eligible (ruling 2026-11-28, \
+             round 6: its content may change after learning): {j:?}"
+        );
+    }
+    let rs = RuleSet::from_toml(
+        r##"
 [[rule]]
 decision = "allow"
 reason = "y"
@@ -184,15 +239,6 @@ class = ["worktree"]
 "##,
     );
     assert!(rs.allow_enabled(), "{:?}", rs.warnings());
-    let w = TargetClass::Worktree;
-    assert!(is_allow(&judge(
-        &facts(w, &["bash -e #26610971178c87de"]),
-        &[&rs]
-    )));
-    assert!(!is_allow(&judge(
-        &facts(w, &["bash -e #0000000000000000"]),
-        &[&rs]
-    )));
     assert!(is_allow(&judge(&facts(w, &["git branch -d"]), &[&rs])));
     assert!(!is_allow(&judge(&facts(w, &["git branch -D"]), &[&rs])));
     assert!(!is_allow(&judge(&facts(w, &["git branch"]), &[&rs])));
@@ -540,5 +586,36 @@ fn only_modelled_tools_and_confirmed_classes_are_allow_eligible() {
     assert!(!is_allow(&judge(
         &facts(TargetClass::Worktree, &["python3"]),
         &[&py]
+    )));
+    // every interpreter, and (ruling 2026-11-28, round 6) a `bash` / `sh`
+    // script FILE run: a pinned content hash does not make it eligible, the
+    // file may change after the shape was learned
+    for v in [
+        "python #26610971178c87de",
+        "node #26610971178c87de",
+        "perl -e #26610971178c87de",
+        "ruby #26610971178c87de",
+        "bash #26610971178c87de",
+        "bash -e #26610971178c87de",
+        "sh #26610971178c87de",
+        "sh -e -u #26610971178c87de",
+    ] {
+        let t = v.split(' ').next().unwrap();
+        for c in [
+            TargetClass::Worktree,
+            TargetClass::Scratchpad,
+            TargetClass::None,
+        ] {
+            let j = judge(&facts(c, &[v]), &[&tool_rule(t)]);
+            assert!(
+                !is_allow(&j),
+                "`{v}` in {c:?} must not be allow-eligible: {j:?}"
+            );
+        }
+    }
+    // control: the same broad rule shape still Allows a modelled tool
+    assert!(is_allow(&judge(
+        &facts(TargetClass::Worktree, &["rm -f -r"]),
+        &[&tool_rule("rm")]
     )));
 }

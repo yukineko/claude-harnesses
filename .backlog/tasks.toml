@@ -741,3 +741,32 @@ exit 101:  0 passed; 8 failed; 0 ignored; 0 measured; 13 filtered out; finished 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
      Running tests/backlog_20261128_git_write_targets_verifier.rs (target/debug/deps/backlog_20261128_git_write_targets_verifier-50f611af92b15e30)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_git_write_targets_verifier`"""
+
+[[task]]
+id = "ffa05737"
+title = "blastguard detector: redirect shapes fail open (zsh >!/>>!/2>! to protected config Allow; redirect after git add -A drops whole-tree Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main b19e77851 (RED tests committed e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). D1 (test d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow): Allow for 'echo x >! ~/.claude/settings.json', 'echo x >>! ...', 'echo x 2>! ...', 'echo x >! <main>/.githooks/pre-commit' (cwd linked worktree); '&>!' was NOT Allow on main. Controls '>' / '>>' are not Allow. Precondition observed in test: zsh -f -c writes the path after >! / >>! and creates no '!' file. Suspected cause (from verifier, not verified): brush reads '> !' + argument. D2 (test d2_redirect_after_git_add_all_keeps_whole_tree_ask): 'git add -A' is Ask but 'git add -A 2>&1', '> /dev/null', '> log' are Allow; cause (redirect words counted as pathspecs) not verified. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_zsh_bang_clobber_overwrites_protected_config / r9_detector_redirect_drops_git_add_sweep_ask)."
+created_at = 1795840960
+updated_at = 1795840960
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d1_zsh_bang_clobber_redirect_to_protected_path_is_not_allow -- --ignored"
+rev = "eebe135729a339e59f3f5a194401a2ec8b7312c4"
+observed_at = 1795840960
+detail = """
+exit 101: 0.2.1012 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.97s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-66b9e1fbd52ee302)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""

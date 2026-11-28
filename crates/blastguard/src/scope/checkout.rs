@@ -202,6 +202,73 @@ impl SafeRoots {
     }
 }
 
+impl SafeRoots {
+    /// Is `dir` OBSERVED to be neither a linked worktree checkout nor a
+    /// directory holding one directly (`<dir>/<child>`)? Used when `dir` cannot
+    /// be placed under a storage root, so the placement answer is not available
+    /// and the filesystem is asked instead.
+    ///
+    /// `Known(true)` only when `dir` has no `..` component, the session is not
+    /// refused, a checkout probe exists, the spelling resolves, and the
+    /// resolved path is a missing path / non-directory / directory whose own
+    /// `.git` and every immediate child's `.git` are observed not to be a
+    /// linked-checkout link. A child that cannot be read or probed, or a
+    /// directory that cannot be listed, is `Undetermined`; a checkout found is
+    /// `Known(false)`.
+    pub fn holds_no_linked_worktree(&self, dir: &str, cwd: Option<&str>) -> Determination<bool> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
+        let Some(probe) = self.checkout_probe else {
+            return Determination::undetermined(
+                "blastguard has no worktree checkout probe for this session (no resolver)",
+            );
+        };
+        if dir.split('/').any(|c| c == "..") {
+            return Determination::undetermined(
+                "directory has a `..` component, so where it lands is not decided by its spelling",
+            );
+        }
+        let lexical = match self.lexical_absolute(dir, cwd) {
+            Determination::Known(l) => l,
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        };
+        let Some(real) = self.resolve(&lexical) else {
+            return Determination::undetermined(format!("`{dir}` could not be resolved"));
+        };
+        match probe(&real) {
+            Determination::Known(false) => {}
+            Determination::Known(true) => return Determination::known(false),
+            Determination::Undetermined(u) => return Determination::Undetermined(u),
+        }
+        match std::fs::symlink_metadata(&real) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => return Determination::known(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Determination::known(true);
+            }
+            Err(e) => return Determination::undetermined(format!("cannot lstat {real}: {e}")),
+        }
+        let entries =
+            match harness_core::boundary::read_dir_entries_checked(std::path::Path::new(&real)) {
+                Determination::Known(Some(v)) => v,
+                Determination::Known(None) => return Determination::known(true),
+                Determination::Undetermined(u) => return Determination::Undetermined(u),
+            };
+        for entry in entries {
+            let Some(child) = entry.to_str() else {
+                return Determination::undetermined(format!("non-UTF-8 entry below {real}"));
+            };
+            match probe(child) {
+                Determination::Known(false) => {}
+                Determination::Known(true) => return Determination::known(false),
+                Determination::Undetermined(u) => return Determination::Undetermined(u),
+            }
+        }
+        Determination::known(true)
+    }
+}
+
 /// "Is `dir` a linked git worktree checkout?" — `Known(false)` only for an
 /// observed no; an IO error is `Undetermined` (never folded into "no", so the
 /// caller can name it rather than report the operand as placed `Outside`).

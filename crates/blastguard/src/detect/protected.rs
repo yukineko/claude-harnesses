@@ -708,6 +708,12 @@ blastguard cannot tell that this is intended and refuses to guess"
         Determination::Undetermined(_) => {}
     }
     if subject.contains("worktrees") {
+        // Not placeable under a storage root: ask the filesystem instead. An
+        // observed plain directory (no linked checkout in or directly below it)
+        // moves no worktree; anything unobserved keeps the Ask.
+        if let Determination::Known(true) = ctx.scope.holds_no_linked_worktree(&subject, base) {
+            return None;
+        }
         return Some(Decision::ask(format!(
             "{action} {src} names a worktree directory that could not be placed — blastguard \
 cannot tell whether it moves linked worktrees away, and refuses to guess"

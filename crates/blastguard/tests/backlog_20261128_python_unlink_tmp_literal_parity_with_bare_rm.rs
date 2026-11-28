@@ -30,14 +30,20 @@ use std::process::{Command, Stdio};
 
 fn decision(command: &str) -> (String, String) {
     let bin = env!("CARGO_BIN_EXE_blastguard");
+    // A real hook always sends cwd (S5b(a) makes an unknown cwd Undetermined
+    // for a program that imports a module). Sandbox cwd = HOME = an empty dir.
+    let sandbox = std::env::temp_dir().join(format!("bg-2f8d2abe-{}", std::process::id()));
+    std::fs::create_dir_all(&sandbox).unwrap();
     let payload = serde_json::json!({
+        "cwd": sandbox,
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": { "command": command },
     })
     .to_string();
     let mut hook = Command::new(bin);
-    hook.env("CLAUDECODE", "1")
+    hook.env("HOME", &sandbox)
+        .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
@@ -66,7 +72,6 @@ fn decision(command: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED(2f8d2abe): python heredoc os.unlink('/tmp/x.tmp') is Deny while bare `rm /tmp/x.tmp` is Allow (spec: os.unlink(p) == rm p)"]
 fn parity_os_unlink_tmp_literal_matches_bare_rm() {
     let bare = decision("rm /tmp/x.tmp");
     let py = decision("python3 - <<'PY'\nimport os\nos.unlink('/tmp/x.tmp')\nPY");
@@ -75,6 +80,8 @@ fn parity_os_unlink_tmp_literal_matches_bare_rm() {
         "os.unlink('/tmp/x.tmp') must get the bare `rm /tmp/x.tmp` verdict: \
          python={py:?} bare={bare:?}"
     );
+    let hosts = decision("python3 - <<'PY'\nimport os\nos.unlink('/etc/hosts')\nPY");
+    assert_eq!(hosts.0, "deny", "system path stays Deny: {hosts:?}");
 }
 
 #[test]

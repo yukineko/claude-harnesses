@@ -543,21 +543,27 @@ fn r11_guard_own_keys_and_line_level_redirections() {
     let e = env_prod("guard");
     fixtures(&e);
     let r = sp_repo(&e);
-    for (cwd, c) in [
-        (e.wt.clone(), "git add -A"),
-        (e.sp.clone(), "rm -rf build"),
-        (r.clone(), "git add -A"),
-        (r.clone(), "git commit -a -m x"),
-        (r.clone(), "git clean -fdx"),
+    // (cwd, command, expected Allow with its own entry)
+    for (cwd, c, want_allow) in [
+        (e.wt.clone(), "git add -A", true),
+        (e.sp.clone(), "rm -rf build", true),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        // Before: Allow with its own entry. After: NOT Allow (scope cut: a
+        // git command in a scratchpad repository is never Allow-learnable).
+        (r.clone(), "git add -A", false),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        (r.clone(), "git commit -a -m x", false),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        (r.clone(), "git clean -fdx", false),
     ] {
         let p = bash(&cwd, c);
         let s = shape(&e, &p);
         assert_eq!(s["decision"], "ask", "precondition: `{c}` Asks: {s}");
         let k = s["shape"].as_str().unwrap();
         assert_eq!(
-            decide_with(&e, &table_with(&e, k), &p),
-            "allow",
-            "`{c}` in {} with its own allow entry {k}",
+            decide_with(&e, &table_with(&e, k), &p) == "allow",
+            want_allow,
+            "`{c}` in {} with its own allow entry {k} (want Allow: {want_allow})",
             cwd.display()
         );
     }
@@ -605,12 +611,25 @@ fn r11_guard_own_keys_and_line_level_redirections() {
             format!("git -c core.worktree={m} clean -fdx"),
         ),
     ] {
-        let probe = bash(&r, &probe);
-        if decide_with(&e, &no_table(&e), &probe) == "allow" {
-            continue; // detector side, not a ride
-        }
-        if let Some(x) = ride(&e, &bash(&r, &sib), &probe) {
-            bad.push(x);
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        // The scratchpad sibling's key is no longer Allow-eligible, so the
+        // ride from `r` alone became vacuous; the same line-level
+        // redirections are also ridden from the session's own linked
+        // worktree, where the sibling key IS Allow-eligible.
+        for cwd in [r.clone(), e.wt.clone()] {
+            let probe = bash(&cwd, &probe);
+            if decide_with(&e, &no_table(&e), &probe) == "allow" {
+                continue; // detector side, not a ride
+            }
+            let sibling = bash(&cwd, &sib);
+            if shape(&e, &sibling)["decision"] != "ask" {
+                // `git clean -fdx` in the own worktree is a detector Allow
+                // (no key is learned for it): no sibling to ride.
+                continue;
+            }
+            if let Some(x) = ride(&e, &sibling, &probe) {
+                bad.push(x);
+            }
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

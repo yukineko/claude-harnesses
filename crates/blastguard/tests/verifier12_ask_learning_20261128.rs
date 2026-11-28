@@ -217,6 +217,17 @@ fn table_with(e: &Env, k: &str) -> PathBuf {
     p
 }
 
+/// A learned table recording `k` approved 3 times from 2 sessions, 0 declines
+/// (`harness_core::asklearn::MIN_APPROVALS` / `MIN_SESSIONS`).
+// re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+fn table_recorded(e: &Env, k: &str) -> PathBuf {
+    let p = e.root.join("t-recorded.json");
+    let entry = json!({"shape": k, "decision": "allow", "approvals": 3, "declines": 0,
+                       "sessions": 2, "samples": []});
+    std::fs::write(&p, json!({"version": 1, "entries": [entry]}).to_string()).unwrap();
+    p
+}
+
 fn cmd_of(p: &Value) -> String {
     p["tool_input"]["command"]
         .as_str()
@@ -224,7 +235,9 @@ fn cmd_of(p: &Value) -> String {
         .to_string()
 }
 
-/// Learn `sibling` allow; `probe` must not become Allow. Returns the failure
+/// Record `sibling`'s shape at the learning thresholds (re-anchored
+/// 2026-11-28: its own Allow is no longer a precondition); `probe` must not
+/// become Allow. Returns the failure
 /// text (`None` when no ride). `extra` is the hook process environment for the
 /// probe only.
 fn ride_env(e: &Env, sibling: &Value, probe: &Value, extra: &[(&str, &str)]) -> Option<String> {
@@ -243,19 +256,21 @@ fn ride_env(e: &Env, sibling: &Value, probe: &Value, extra: &[(&str, &str)]) -> 
         cmd_of(sibling)
     );
     let k = sib["shape"].as_str().unwrap().to_string();
-    let t = table_with(e, &k);
+    // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+    // Before: the learned table held the sibling's key at 50 approvals / 20
+    // sessions and the sibling itself had to be Allow with it (precondition).
+    // After: every caller's sibling is a git command in a scratchpad, which
+    // the scope cut makes never Allow-learnable, so the sibling's Allow is no
+    // longer required. The shape is still RECORDED at the learner's thresholds
+    // (3 approvals from 2 sessions, 0 declines = what an Allow is learned
+    // from) and the probe must still not become Allow with that record.
+    let t = table_recorded(e, &k);
     let sib_own = decide_with(e, &t, sibling);
-    assert_eq!(
-        sib_own,
-        "allow",
-        "precondition: sibling {:?} is Allow with its own entry {k}",
-        cmd_of(sibling)
-    );
     let after = decide_env(e, &t, probe, extra);
     (after == "allow").then(|| {
         format!(
             "probe `{}` (cwd {}) was {before} without a table but Allow once the sibling `{}` \
-             (cwd {}) was learned (key {k}); probe shape {}",
+             (cwd {}) was recorded (key {k}, sibling with it: {sib_own}); probe shape {}",
             cmd_of(probe),
             probe["cwd"].as_str().unwrap_or(""),
             cmd_of(sibling),
@@ -632,6 +647,45 @@ fn r12_session_env_git_dir_is_ignored() {
             if let Some(x) = ride_env(&e, &bash(&r, c), &bash(&r, c), &extra) {
                 bad.push(format!("{extra:?}: {x}"));
             }
+            // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+            // The scratchpad ride above is now Undetermined by the scope cut
+            // alone, so the environment rule is observed directly where a git
+            // class IS determined: the session's own linked worktree. Without
+            // the variable `c` there is `s4-worktree`; with it the class must
+            // be undetermined and the own key (learned without the variable)
+            // must not Allow it.
+            let own = bash(&e.wt, c);
+            let plain = shape(&e, &own);
+            if plain["decision"] != "ask" {
+                // A detector Allow (`git clean -fdx` in a worktree) never
+                // reaches the askrules judge: no learned-Allow question.
+                continue;
+            }
+            let k = plain["shape"].as_str().unwrap().to_string();
+            assert_eq!(
+                k.split('|').nth(1),
+                Some("s4-worktree"),
+                "precondition: `{c}` in the own worktree without {extra:?} is s4-worktree: {k}"
+            );
+            assert_eq!(
+                decide_with(&e, &table_recorded(&e, &k), &own),
+                "allow",
+                "precondition: `{c}` in the own worktree is Allow with its recorded key {k}"
+            );
+            let redirected = shape_env(&e, &own, &extra);
+            let rk = redirected["shape"].as_str().unwrap_or("");
+            if rk.split('|').nth(1) != Some("s4-undetermined") {
+                bad.push(format!(
+                    "{extra:?}: `{c}` in the own worktree keeps class {rk} (want s4-undetermined)"
+                ));
+            }
+            let d = decide_env(&e, &table_recorded(&e, &k), &own, &extra);
+            if d == "allow" {
+                bad.push(format!(
+                    "{extra:?}: `{c}` in the own worktree is Allow with key {k} learned \
+                     without the variable"
+                ));
+            }
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -724,22 +778,28 @@ fn r12_guard_own_keys_stay_allow() {
         Some(std::fs::canonicalize(&benign).unwrap())
     );
     let mut bad = vec![];
-    for (cwd, c) in [
-        (e.wt.clone(), "git add -A"),
-        (e.sp.clone(), "rm -rf build"),
-        (r.clone(), "git add -A"),
-        (r.clone(), "git clean -fdx"),
-        (rel.clone(), "git add -A"),
-        (benign.clone(), "git add -A"),
+    // (cwd, command, expected Allow with its own entry)
+    for (cwd, c, want_allow) in [
+        (e.wt.clone(), "git add -A", true),
+        (e.sp.clone(), "rm -rf build", true),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        // Before: Allow with its own entry. After: NOT Allow (scope cut: a
+        // git command in a scratchpad repository is never Allow-learnable).
+        (r.clone(), "git add -A", false),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        (r.clone(), "git clean -fdx", false),
+        (rel.clone(), "git add -A", true),
+        // re-anchored 2026-11-28 (leader ruling): scratchpad git removed from learned Allow
+        (benign.clone(), "git add -A", false),
     ] {
         let p = bash(&cwd, c);
         let s = shape(&e, &p);
         assert_eq!(s["decision"], "ask", "precondition: `{c}` Asks: {s}");
         let k = s["shape"].as_str().unwrap();
         let d = decide_with(&e, &table_with(&e, k), &p);
-        if d != "allow" {
+        if (d == "allow") != want_allow {
             bad.push(format!(
-                "`{c}` in {} with its own entry {k} => {d}",
+                "`{c}` in {} with its own entry {k} => {d} (want Allow: {want_allow})",
                 cwd.display()
             ));
         }

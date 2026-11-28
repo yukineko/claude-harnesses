@@ -794,6 +794,8 @@ notes = "Observed by verifier15 (2026-11-28): the three commands are detector Al
 created_at = 1795856888
 updated_at = 1795856888
 weight = 0.0
+issue_number = 2026
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2026"
 rev = 0
 
 [task.repro]

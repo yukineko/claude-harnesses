@@ -64,6 +64,7 @@
 //! archive extraction, a build script, `git checkout` of a tracked symlink).
 
 mod nested;
+mod zsh_qualifier;
 
 use super::ast::targets::{self, Role};
 use super::{
@@ -74,6 +75,7 @@ use super::{
 use crate::exclude;
 use crate::model::Decision;
 use harness_core::verdict::Determination;
+use zsh_qualifier::{prompt_expands_substitution, word_evaluates};
 
 /// What [`redirect_landing`] tells the redirect loop to do with one target.
 pub(super) enum Step {
@@ -365,144 +367,6 @@ fn is_function_header(w: &str) -> bool {
             && n.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "_-.:".contains(c))
     })
-}
-
-/// `print -P …` expands prompt escapes and, under `promptsubst`, runs a
-/// `$( )` / backtick / `${ }` held in its operand whatever the quoting.
-fn prompt_expands_substitution(c: &super::ast::SimpleCommand) -> bool {
-    use super::ast::Value;
-    let lit = |w: &super::ast::Word| match &w.value {
-        Value::Literal(s) => s.clone(),
-        Value::Undetermined(_) => w.raw.clone(),
-    };
-    match c.argv.first().map(lit).as_deref() {
-        Some("print") => {}
-        _ => return false,
-    }
-    let flags_p = c.argv[1..].iter().any(|w| {
-        let s = lit(w);
-        s.starts_with('-') && s.contains('P')
-    });
-    flags_p
-        && c.argv[1..].iter().any(|w| {
-            [&w.raw, &lit(w)]
-                .iter()
-                .any(|s| s.contains("$(") || s.contains('`') || s.contains("${"))
-        })
-}
-
-/// Whether the shell word `raw` (as written) may run code while it is
-/// expanded in zsh: outside quotes a `(` that is not the first character of
-/// the word and not the opener of a `$( )` / `<( )` / `>( )` substitution
-/// (a glob qualifier `(…)` of ANY spelling — `(e`, `(.e`, `(Ne`, `(#qe` — or
-/// the `(` of a word-leading `=(`); `$~` / `${~` (GLOB_SUBST) outside single
-/// quotes; a flagged expansion `${(…)` outside single quotes. A substitution
-/// body is skipped: its commands are words of their own in the script.
-fn word_evaluates(raw: &str) -> bool {
-    let chars: Vec<char> = raw.chars().collect();
-    let (mut in_s, mut in_d) = (false, false);
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied();
-        if in_s {
-            in_s = c != '\'';
-            i += 1;
-            continue;
-        }
-        match c {
-            '\\' => i += 1,
-            '\'' if !in_d => {
-                in_s = true;
-                // `$'…'`: a backslash escapes inside it.
-                if i > 0 && chars[i - 1] == '$' {
-                    i += 1;
-                    while i < chars.len() && chars[i] != '\'' {
-                        i += if chars[i] == '\\' { 2 } else { 1 };
-                    }
-                    in_s = false;
-                }
-            }
-            '"' => in_d = !in_d,
-            '`' => {
-                i += 1;
-                while i < chars.len() && chars[i] != '`' {
-                    i += if chars[i] == '\\' { 2 } else { 1 };
-                }
-            }
-            '$' if next == Some('~') => return true,
-            '$' if next == Some('{') && matches!(chars.get(i + 2), Some('~' | '(')) => return true,
-            // `${ … }`: its operand text is not a glob (`${F:-(none)}`).
-            '$' if next == Some('{') => {
-                i = skip_group(&chars, i + 1, '{', '}');
-                continue;
-            }
-            '$' | '<' | '>' if next == Some('(') && (c == '$' || !in_d) => {
-                i = skip_group(&chars, i + 1, '(', ')');
-                continue;
-            }
-            // A word-leading `=(` is a process substitution.
-            '(' if !in_d && i == 1 && chars[0] == '=' => return true,
-            '(' if !in_d && i > 0 => match qualifier_group(&chars, i) {
-                Some(end) if group_runs_code(&chars[i + 1..end]) => return true,
-                Some(end) => {
-                    i = end + 1;
-                    continue;
-                }
-                None => return true,
-            },
-            _ => {}
-        }
-        i += 1;
-    }
-    false
-}
-
-/// The index of the `)` closing the `(` at `open`, when there is one.
-fn qualifier_group(chars: &[char], open: usize) -> Option<usize> {
-    let end = skip_group(chars, open, '(', ')');
-    (end > open + 1 && chars.get(end - 1) == Some(&')')).then_some(end - 1)
-}
-
-/// Whether the text of a non-leading `(…)` group may be a glob qualifier
-/// list that runs code: an `e` followed by its (non-alphanumeric) delimiter,
-/// or a `+function` — whatever flags precede it (`e`, `.e`, `Ne`, `^e`,
-/// `#qe`). A group of plain pattern text (`(.)`, `(N)`, `(x)`, `(err|warn)`)
-/// runs nothing.
-fn group_runs_code(inner: &[char]) -> bool {
-    inner.contains(&'+')
-        || inner
-            .iter()
-            .enumerate()
-            .any(|(k, &c)| c == 'e' && inner.get(k + 1).is_some_and(|n| !n.is_alphanumeric()))
-}
-
-/// Index just past the `close` matching the `open` at `at` (the end when
-/// none), skipping quoted text and backslash escapes.
-fn skip_group(chars: &[char], at: usize, open: char, close: char) -> usize {
-    let (mut depth, mut i) = (0usize, at);
-    let (mut in_s, mut in_d) = (false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        if in_s {
-            in_s = c != '\'';
-        } else if c == '\\' {
-            i += 1;
-        } else if c == '\'' && !in_d {
-            in_s = true;
-        } else if c == '"' {
-            in_d = !in_d;
-        } else if !in_d && c == open {
-            depth += 1;
-        } else if !in_d && c == close {
-            depth -= 1;
-            if depth == 0 {
-                return i + 1;
-            }
-        }
-        i += 1;
-    }
-    chars.len()
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)

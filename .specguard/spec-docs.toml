@@ -95,6 +95,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '同じ行で relink された redirect target は実際の着地点で判定する': redirect_landing, the modelled relinking verbs, the segment selection, the physical landing substitution and the Ask cases."
 
 [[spec]]
+path = "crates/blastguard/src/detect/relink/zsh_qualifier.rs"
+doc = "docs/specs/blastguard.md"
+reason = "relink bullet extension (backlog 3de4729f): a word that runs code while zsh expands it (glob qualifier `(e…)` / `(+fn)` read with zsh's qualifier grammar, `=( )`, `${(…)`, `$~`, `print -P` operand) is an unmodelled relinker, an Ask; helper of detect/relink.rs."
+
+[[spec]]
 path = "crates/blastguard/src/detect/relink/nested.rs"
 doc = "docs/specs/blastguard.md"
 reason = "relink bullet extension naming `detect/relink/nested.rs` (backlog 00c6c2b8): relinkers run inside $( )/backticks/<( ) and shell -c / vi ex `:!` escape bodies are modelled as commands of their own; undetermined bodies or depth cap are an unmodelled relinker (Ask)."

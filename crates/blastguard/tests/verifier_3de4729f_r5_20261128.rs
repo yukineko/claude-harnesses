@@ -223,7 +223,6 @@ const FAILOPEN_ALNUM_E_DELIMITER: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: fail-open (pre-existing, Allow at base too) — alphanumeric e-qualifier delimiter `*(eQ…Q)` is read as inert"]
 fn failopen_alnum_e_delimiter_stays_not_allow() {
     expect(
         "fo-alnum",
@@ -247,7 +246,6 @@ const FAILOPEN_PARAM_OPERAND: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: fail-open (pre-existing, Allow at base too) — `${…}` skip hides a glob qualifier / nested `$~` in the operand"]
 fn failopen_param_operand_stays_not_allow() {
     expect(
         "fo-param",
@@ -267,7 +265,6 @@ const FAILOPEN_PRINT_P_VARIANTS: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: fail-open (pre-existing, Allow at base too) — print -P via builtin/noglob or with the operand in a variable"]
 fn failopen_print_p_variants_stay_not_allow() {
     expect(
         "fo-printp",
@@ -348,7 +345,6 @@ const FP_NON_EXECUTING_GROUP: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: FP (introduced by this branch) — non-executing glob group with `e|`, `e_` or a size/time `+` is read as code-running"]
 fn fp_non_executing_group_is_allow() {
     expect(
         "fp-group",

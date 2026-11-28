@@ -84,7 +84,13 @@ impl GitLayout {
     /// and its `gitdir` back-link names `<toplevel>/.git`, a real file. A work
     /// tree redirected elsewhere (`core.worktree` in `config.worktree`) has a
     /// toplevel whose `.git` is not that back-link, so it is not a linked root.
-    fn linked_root(&self) -> Option<PathBuf> {
+    ///
+    /// Round 14: the toplevel must also sit DIRECTLY in one of the known
+    /// worktree containers (fixed positions, exact parent match): (a)
+    /// `<main tree's parent>/.harness-worktrees`, (b) `<main tree>/.claude/worktrees`,
+    /// (c) `$HOME/.condukt/worktrees` (only when `home` is known). Any other
+    /// location is not a linked root (Undetermined).
+    fn linked_root(&self, home: Option<&str>) -> Option<PathBuf> {
         if self.is_main() || self.git_dir.parent() != Some(&self.common_dir.join("worktrees")) {
             return None;
         }
@@ -94,9 +100,18 @@ impl GitLayout {
             return None;
         }
         let main_tree = self.common_dir.parent()?;
-        // A linked root equal to, inside or containing the main tree is the
-        // main tree's own files (a forged back-link), never a linked checkout.
-        if self.toplevel.starts_with(main_tree) || main_tree.starts_with(&self.toplevel) {
+        let container = self.toplevel.parent()?;
+        let canon_home = home
+            .filter(|h| !h.is_empty())
+            .and_then(|h| std::fs::canonicalize(h).ok());
+        let in_container = main_tree
+            .parent()
+            .is_some_and(|p| container == p.join(".harness-worktrees"))
+            || container == main_tree.join(".claude").join("worktrees")
+            || canon_home
+                .as_ref()
+                .is_some_and(|h| container == h.join(".condukt").join("worktrees"));
+        if !in_container {
             return None;
         }
         let Determination::Known(Some(back)) =
@@ -343,16 +358,27 @@ pub fn class_of(targets: &[Target], ctx: &Ctx<'_>) -> TargetClass {
         .unwrap_or(TargetClass::None)
 }
 
-/// `norm` has a `scratchpad` component directly preceded by the payload
-/// session id (non-empty, a single path component).
+/// `norm` is `<root>/claude-<n>/<proj>/<SID>/scratchpad[/...]` at FIXED
+/// positions: `<root>` is `/private/tmp` (or its spelling `/tmp`; `$TMPDIR` is NOT a root), then a
+/// component with the `claude-` prefix, exactly one project component, the
+/// payload session id (non-empty, one component), then `scratchpad`. A
+/// matching run found anywhere else is not this shape.
 fn is_own_scratchpad(norm: &str, session_id: Option<&str>) -> bool {
     let Some(sid) = session_id.filter(|s| !s.is_empty() && !s.contains('/') && *s != "..") else {
         return false;
     };
-    let comps: Vec<&str> = norm.split('/').collect();
-    comps
-        .windows(2)
-        .any(|w| w[0] == sid && w[1] == "scratchpad")
+    let rest = ["/private/tmp/", "/tmp/"]
+        .iter()
+        .find_map(|r| norm.strip_prefix(r));
+    let Some(rest) = rest else {
+        return false;
+    };
+    // claude-<n> / <proj> / <SID> / scratchpad [/ ...]
+    let mut it = rest.split('/');
+    matches!(
+        (it.next(), it.next(), it.next(), it.next()),
+        (Some(c), Some(p), Some(s), Some("scratchpad")) if c.starts_with("claude-") && !p.is_empty() && s == sid
+    )
 }
 
 fn has_component(path: &str, name: &str) -> bool {
@@ -557,7 +583,7 @@ fn cwd_linked_root(ctx: &Ctx<'_>) -> Option<PathBuf> {
     if !c.starts_with('/') {
         return None;
     }
-    git_layout(&realpath(&c), ctx)?.linked_root()
+    git_layout(&realpath(&c), ctx)?.linked_root(ctx.home)
 }
 
 /// Whether `abs` lies STRICTLY inside the checkout `root`: below it, not the
@@ -569,7 +595,7 @@ fn strictly_inside_checkout(abs: &str, root: &Path, ctx: &Ctx<'_>) -> bool {
     p != root
         && p.starts_with(root)
         && git_layout(abs, ctx)
-            .and_then(|l| l.linked_root())
+            .and_then(|l| l.linked_root(ctx.home))
             .as_deref()
             == Some(root)
 }
@@ -650,7 +676,7 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     let placed = match git_layout(&real, ctx) {
         None => TargetClass::Undetermined,
         Some(l) if l.is_main() => TargetClass::MainTree,
-        Some(l) => match (l.linked_root(), cwd_linked_root(ctx)) {
+        Some(l) => match (l.linked_root(ctx.home), cwd_linked_root(ctx)) {
             (Some(root), Some(own)) if root == own => TargetClass::Worktree,
             _ => TargetClass::Undetermined,
         },

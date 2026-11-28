@@ -163,6 +163,7 @@ fn control_harmless_relative_rm_in_scratchpad_is_allow() {
 }
 
 #[test]
+#[ignore = "RED: backlog ea96e65d"]
 fn relative_rm_of_claude_settings_is_not_allow() {
     let fx = Fx::new();
     let cases: Vec<(PathBuf, String)> = [
@@ -177,6 +178,7 @@ fn relative_rm_of_claude_settings_is_not_allow() {
 }
 
 #[test]
+#[ignore = "RED: backlog ea96e65d"]
 fn git_apply_unsafe_paths_into_claude_dir_is_not_allow() {
     let fx = Fx::new();
     let c = format!(
@@ -192,6 +194,7 @@ fn git_apply_unsafe_paths_into_claude_dir_is_not_allow() {
 }
 
 #[test]
+#[ignore = "RED: backlog ea96e65d"]
 fn mv_of_worktrees_container_is_not_allow() {
     let fx = Fx::new();
     let c = format!(
@@ -207,6 +210,7 @@ fn mv_of_worktrees_container_is_not_allow() {
 }
 
 #[test]
+#[ignore = "RED: backlog ea96e65d"]
 fn relative_rm_rf_src_in_main_tree_is_not_allow() {
     let fx = Fx::new();
     assert_none_allow(

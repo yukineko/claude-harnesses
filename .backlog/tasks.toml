@@ -760,6 +760,8 @@ notes = "Found by round-4 verifier of 3de4729f; test crates/blastguard/tests/ver
 created_at = 1795882872
 updated_at = 1795882872
 weight = 0.0
+issue_number = 2031
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2031"
 rev = 0
 
 [task.repro]

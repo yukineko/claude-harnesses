@@ -827,6 +827,8 @@ notes = "Observed by verifier16 round 16 (2026-11-28): rm -rf <other worktree>, 
 created_at = 1795856972
 updated_at = 1795856972
 weight = 0.0
+issue_number = 2027
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2027"
 rev = 0
 
 [task.repro]

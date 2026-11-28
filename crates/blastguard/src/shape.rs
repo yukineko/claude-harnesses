@@ -12,8 +12,10 @@
 //!
 //! Not pure: path classification uses the injected resolver held by
 //! [`SafeRoots`], and [`Target::GitRepo`] reads the `.git` entry of the
-//! repository (directory = main working tree, gitlink file = linked
-//! worktree); an unreadable one is `Undetermined`.
+//! repository (real directory = main working tree; gitlink file = linked
+//! worktree only when [`gitlink_kind`] vouches for it, else a main tree or
+//! `Undetermined`; a symlinked `.git` is `Undetermined`); an unreadable one is
+//! `Undetermined`.
 
 use crate::scope::SafeRoots;
 use harness_core::asklearn::{Shape, TargetClass, UNRESOLVED_VERB};
@@ -423,10 +425,10 @@ fn gitlink_kind(root: &std::path::Path, dot_git: &std::path::Path) -> RepoKind {
     else {
         return RepoKind::Unknown;
     };
-    match (
-        std::fs::canonicalize(back.trim()),
-        std::fs::canonicalize(dot_git),
-    ) {
+    // git resolves a relative back-link (`--relative-paths`) against the git
+    // dir, never against this process's cwd.
+    let back = gitdir.join(back.trim());
+    match (std::fs::canonicalize(back), std::fs::canonicalize(dot_git)) {
         (Ok(a), Ok(b)) if a == b => RepoKind::Linked,
         _ => RepoKind::Unknown,
     }
@@ -483,8 +485,13 @@ fn absolute_of(raw: &str, ctx: &Ctx<'_>) -> Option<String> {
 
 /// Class of the REPOSITORY a git write acts on (spec rule: a git write takes
 /// its class from the tree it modifies, not from `none`). System, protected
-/// config and scratchpad locations keep their own class; a worktree storage
-/// path or a linked worktree is `Worktree`; the main working tree is
+/// config keep their own class. A scratchpad repository is `Scratchpad` only
+/// when `.git` is a real (non-symlink) directory whose config has no
+/// `core.worktree` (or there is no repository); a symlinked `.git`, a
+/// `core.worktree`, an `include`d config or an unreadable config is
+/// `Undetermined`, and a gitlink file is judged by [`gitlink_kind`] like any
+/// other tree. Only the linked worktree the session's cwd belongs to is
+/// `Worktree` (a worktree storage path is not); the main working tree is
 /// `MainTree` (never Allow-learnable, CLAUDE.md §8); anything not shown to be
 /// one of those is `Undetermined`.
 pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
@@ -508,11 +515,18 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
     }
     let real_spelling = spelling_is_real(raw, &abs, &real);
     if lexical == TargetClass::Scratchpad && physical == TargetClass::Scratchpad {
-        return if real_spelling {
-            TargetClass::Scratchpad
-        } else {
-            TargetClass::Undetermined
-        };
+        if !real_spelling {
+            return TargetClass::Undetermined;
+        }
+        // Round 11: the class is the tree git really uses, not the cwd's
+        // spelling. Scratchpad only for no repository at all or a plain one
+        // (`.git` a real directory, no `core.worktree`); a gitlink file falls
+        // through to the git-dir judgement below, anything else is unknown.
+        match scratch_repo_state(&real) {
+            ScratchRepo::NoRepo | ScratchRepo::Plain => return TargetClass::Scratchpad,
+            ScratchRepo::Gitlink => {}
+            ScratchRepo::Unsafe => return TargetClass::Undetermined,
+        }
     }
     // Round 9: the repository's kind is git's answer, never a substring of
     // the spelling (the `.harness-worktrees/` container is no repository).
@@ -532,6 +546,79 @@ pub fn class_of_repo(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
         return TargetClass::Undetermined;
     }
     placed
+}
+
+/// What git would use for a repository found at or above a scratchpad path.
+enum ScratchRepo {
+    /// No `.git` anywhere above (every probe was "absent").
+    NoRepo,
+    /// `.git` is a real directory whose config has no `core.worktree`.
+    Plain,
+    /// `.git` is a gitlink file (judged by [`gitlink_kind`]).
+    Gitlink,
+    /// A symlinked `.git`, a `core.worktree`, an `include`d config, or
+    /// anything unreadable: not shown to be plain (restrictive).
+    Unsafe,
+}
+
+/// Same upward search as [`repo_kind_root`], reporting how git's git dir and
+/// work tree are determined for the nearest `.git`.
+fn scratch_repo_state(abs: &str) -> ScratchRepo {
+    let mut cur = std::path::Path::new(abs);
+    loop {
+        let dot_git = cur.join(".git");
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(m) if m.is_dir() => {
+                return match git_config_redirects(&dot_git.join("config")) {
+                    Some(false) => ScratchRepo::Plain,
+                    _ => ScratchRepo::Unsafe,
+                };
+            }
+            Ok(m) if m.is_file() => return ScratchRepo::Gitlink,
+            Ok(_) => return ScratchRepo::Unsafe,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return ScratchRepo::Unsafe,
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => return ScratchRepo::NoRepo,
+        }
+    }
+}
+
+/// Whether the git config at `path` redirects the work tree: `Some(true)` when
+/// a `[core]` section sets `worktree` or any `[include*]` section could, and
+/// `None` when it cannot be read (absent is `Some(false)`).
+fn git_config_redirects(path: &std::path::Path) -> Option<bool> {
+    let text = match harness_core::boundary::read_to_string(path) {
+        Determination::Known(Some(t)) => t,
+        Determination::Known(None) => return Some(false),
+        _ => return None,
+    };
+    let mut section = String::new();
+    for raw in text.lines() {
+        let mut rest = raw.trim();
+        if let Some(inner) = rest.strip_prefix('[') {
+            let end = inner.find(']')?;
+            let head = inner[..end].trim().to_ascii_lowercase();
+            section = head.split_whitespace().next().unwrap_or("").to_string();
+            if section.starts_with("include") {
+                return Some(true);
+            }
+            rest = inner[end + 1..].trim();
+        }
+        if section == "core" {
+            let key = rest
+                .split(['=', ' ', '\t'])
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if key == "worktree" {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
 }
 
 /// `p` with every symlink resolved: the canonical path of its nearest existing

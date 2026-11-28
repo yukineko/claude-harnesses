@@ -810,9 +810,24 @@ mod prog {
                 None => break,
             };
             i += 1;
+            // `-0` / `-l` take an optional number directly after the letter;
+            // `skip_to` jumps over it.
+            let mut skip_to = 0usize;
             for (k, ch) in flags.char_indices() {
+                if k < skip_to {
+                    continue;
+                }
                 let rest = flags.get(k + ch.len_utf8()..).unwrap_or("");
                 match ch {
+                    // `-i[ext]` edits the operand files in place; the rest of
+                    // the cluster is the backup extension (perl: `-pie` is
+                    // extension `e`, not a program). The files are judged as
+                    // write targets by `system_paths::perl_in_place_files`.
+                    'i' => break,
+                    '0' | 'l' => {
+                        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+                        skip_to = k + ch.len_utf8() + digits;
+                    }
                     'e' | 'E' if !rest.is_empty() => {
                         programs.push(ProgramSource::InlineLiteral(rest.to_string()));
                         break;
@@ -822,7 +837,7 @@ mod prog {
                         i += 1;
                         break;
                     }
-                    c if "acnlpsStTuUvwW".contains(c) => {}
+                    c if "acnpsStTuUvwW".contains(c) => {}
                     _ => return ps_undet(format!("option {v} not modelled")),
                 }
             }

@@ -91,7 +91,6 @@ fn run_as(command: &str, home: &Home, subagent: bool) -> (String, String) {
 }
 
 #[test]
-#[ignore = "RED(1f968657): subagent perl -pi in-place edit denied as option -pi not modelled"]
 fn perl_in_place_literal_path_is_allowed() {
     let home = unique_home("ctl1");
     let c = "perl -pi -e 's/0\\.2\\.578/0.2.579/' m.json";
@@ -108,10 +107,41 @@ fn control_perl_var_from_cmdsub_is_not_allowed() {
 }
 
 #[test]
-#[ignore = "RED(1f968657): subagent perl -pi in-place edit via literal-assigned variable denied as option -pi not modelled"]
 fn perl_in_place_on_literal_assigned_variable_is_allowed() {
     let home = unique_home("red");
     let c = "f=m.json && perl -pi -e 's/0\\.2\\.578/0.2.579/' $f";
     let (d, r) = run_as(c, &home, true);
     assert_eq!(d, "allow", "{c:?} -> {d} | {r}");
+}
+
+#[test]
+fn control_perl_in_place_on_system_file_is_not_allowed() {
+    let home = unique_home("ctl3");
+    for sub in [true, false] {
+        for c in [
+            "perl -pi -e 's/a/b/' /etc/hosts",
+            "perl -i.bak -pe 's/a/b/' /etc/hosts",
+            "perl -0pi -e 's/a/b/' /etc/hosts",
+        ] {
+            let (d, r) = run_as(c, &home, sub);
+            assert_ne!(d, "allow", "{c:?} subagent={sub} -> {d} | {r}");
+        }
+    }
+}
+
+#[test]
+fn perl_in_place_cluster_forms_on_cwd_file_are_allowed_in_both_modes() {
+    let home = unique_home("clu");
+    for sub in [true, false] {
+        for c in [
+            "perl -i.bak -pe 's/a/b/' m.json",
+            "perl -pi.bak -e 's/a/b/' m.json",
+            "perl -i -p -e 's/a/b/' m.json",
+            "perl -0pi -e 's/a/b/' m.json",
+            "perl -0777pi -e 's/a/b/' m.json",
+        ] {
+            let (d, r) = run_as(c, &home, sub);
+            assert_eq!(d, "allow", "{c:?} subagent={sub} -> {d} | {r}");
+        }
+    }
 }

@@ -728,6 +728,15 @@ fn classify_walk(
             )),
         },
         (Family::Python, ProgramSource::InlineLiteral(_)) => Decision::Allow,
+        // Backlog 1f968657: an in-place `-i` perl / ruby edit of FILE with an
+        // inline program. Its write target is judged by the legacy layer
+        // (`system_paths::perl_in_place_files`) and its program text by the
+        // legacy program-text reading, exactly as for a literal stdin body
+        // ([`literal_body`]): no B.5 opinion. Without `-i` an inline program
+        // stays Undetermined.
+        (Family::PerlLike, ProgramSource::InlineLiteral(_)) if perl_in_place_flag(args) => {
+            Decision::Allow
+        }
         (_, ProgramSource::InlineLiteral(_)) => {
             undetermined(format_args!("`{base}` runs an inline program"))
         }
@@ -767,6 +776,39 @@ fn classify_walk(
             ))
         }
     }
+}
+
+/// Whether a perl / ruby argument list carries the in-place switch `-i[ext]`
+/// before its `-e` program. Only literal option clusters are read; the scan
+/// stops at the first operand and at the `-e` cluster's program. `-i`
+/// swallows the rest of its cluster as the backup extension, so nothing after
+/// it is read as a switch (perl: `-pie` is extension `e`). Anything not
+/// literal answers `false` (the restrictive side: stays Undetermined).
+fn perl_in_place_flag(args: &[Word]) -> bool {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let Ok(v) = literal(a) else { return false };
+        let Some(flags) = v
+            .strip_prefix('-')
+            .filter(|f| !f.is_empty() && !f.starts_with('-'))
+        else {
+            return false;
+        };
+        let mut chars = flags.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                'i' => return true,
+                'e' | 'E' => {
+                    if chars.peek().is_none() {
+                        it.next();
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// What a command inside the `-c PROG` body of `cmd` reads as stdin when it

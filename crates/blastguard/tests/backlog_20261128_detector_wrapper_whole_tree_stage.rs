@@ -158,7 +158,7 @@ fn control_wrapped_system_harm_is_refused() {
 }
 
 #[test]
-#[ignore = "RED pending-id"]
+#[ignore = "RED(3221b79b): pending-id"]
 fn wrapped_whole_tree_stage_in_main_tree_is_ask() {
     let b = base();
     let mut bad = Vec::new();

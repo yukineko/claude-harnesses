@@ -803,3 +803,34 @@ exit 101: 0.2.1013 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
      Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-6a284a858e8f7598)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[[task]]
+id = "ad84b715"
+title = "blastguard FP: multi-line git commit -m message line mentioning 'git apply ... <patch>' refused as git apply reading through <"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-28, reason: git apply/am reads its patch through `<` (not a here-document): the patch cannot be read here. RED on main b19e77851: main ask / subagent deny; single-line message with same words = allow. Cause candidate: src/detect/git_apply_patch.rs read_patch_readers splits the command per physical line, so a message line inside a double-quoted -m arg becomes its own segment. Test crates/blastguard/tests/backlog_20261128_text_as_code_fp.rs (f3_*)."
+created_at = 1795842446
+updated_at = 1795842446
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_text_as_code_fp f3_commit_message_mentioning_git_apply_lt_patch_same_as_without"
+rev = "206effeaffea4fbf87b9e9e4b033d322c00e0312"
+observed_at = 1795842446
+detail = """
+exit 101: d in 0.58s
+
+   Compiling blastguard v0.2.1011 (/Users/yuki/src/.harness-worktrees/red-text-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.63s
+     Running tests/backlog_20261128_text_as_code_fp.rs (target/debug/deps/backlog_20261128_text_as_code_fp-1d0f6662a14f81b8)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_text_as_code_fp`"""

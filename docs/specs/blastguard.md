@@ -2006,5 +2006,6 @@ driver セッションでは `ask` を出さない機構を blastguard 自身に
   （`"settings.json"`）は引用除去後の語でも保護判定（`strip_plain_quotes`）。③worktree storage root の祖先の `mv` は Ask
   （`SafeRoots::holds_worktree_root`）。④`.git` がファイル（`--separate-git-dir` の primary）のとき gitdir の `commondir` 有無で
   linked/primary を判別（読めない・判別不能は `Undetermined`）。⑤`git rm -r` は `rm -rf` と同じ shared main tree 判定
-  （`deletion.rs::git_rm_main_tree_refusal`、判定不能は Ask）。
+  （`deletion.rs::git_rm_main_tree_refusal`、判定不能は Ask）。option は `detect/git/rm.rs` が `argv::parse` で読み、
+  `--cached`・`-n`/`--dry-run` は作業ツリーのファイルを消さないので main-tree 拒否の対象外（Allow）。option 表で読み切れない行は拒否側。
 - RED: `crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs`。

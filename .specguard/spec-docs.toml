@@ -1035,6 +1035,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet '`>` 以外の書き込み先も保護設定判定に流す' 項 'git argv パーサ 1 本化': shared option-table parser (-- operands, unique long prefix, --no-X, clustered short, value options), unknown/ambiguous -> undetermined (backlog 4e7fc8e2)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/git/rm.rs"
+doc = "docs/specs/blastguard.md"
+reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' item ⑤: `git rm -r` shared-main-tree refusal, options read with argv::parse, --cached / -n / --dry-run exempt, unreadable options refused (backlog f63b97b3)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/git/apply.rs"
 doc = "docs/specs/blastguard.md"
 reason = "section 'cwd 相対の保護対象・`git apply` の書き込み先・worktree の移動・main tree の再帰削除' bullet `git apply`: --directory value placed against cwd and judged as a write target, --unsafe-paths Ask, unplaceable value Ask (backlog ea96e65d)."

@@ -98891,3 +98891,68 @@ rev = "ee9eca672fd97cf74dc49c5f86d666c2540626fc"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "ea96e65d"
+title = "blastguard detector: relative-path rm/mv of protected config or tree containers is Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Measured on main 5de28ea57 (RED commit f330b1d20, test crates/blastguard/tests/backlog_20261128_detector_relative_protected_targets.rs). Allow observed: (1) cwd ~/.claude: rm settings.json / rm -f settings.json / rm -f ./settings.json (absolute rm -f ~/.claude/settings.json is Deny via protected-path-disarm); (2) git apply --unsafe-paths --directory=HOME/.claude with a patch file from the scratchpad, cwd worktree; (3) mv HOME/src/.harness-worktrees/ to scratchpad/moved (moves all linked worktrees), cwd worktree; (4) cwd = main tree: rm -rf src. Note: cases (2) and (3) are Allow even with absolute paths, so the hole is wider than relative-path resolution. Not measured: absolute rm -rf MAIN/src verdict. Controls GREEN: absolute rm -f of settings.json Deny; rm -f out.txt in scratchpad Allow. git worktree add under ~/.claude is tracked separately in 96faed52. Reported by independent verifier on fp-ask-rules (verifier8_ask_learning_20261128.rs r8_detector_relative_rm_of_claude_settings_is_allow)."
+created_at = 1795836503
+updated_at = 1795842803
+weight = 0.0
+issue_number = 2018
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2018"
+issue_closed_at = 1795842806
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
+rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
+observed_at = 1795836503
+detail = """
+exit 101: -worktrees/red-relative-protected/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.94s
+     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-57d8aeed5f9ca866)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_relative_protected_targets`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_relative_protected_targets"
+exit = 0
+passed = 6
+rev = "216f01a15ef9aa9ec3986b1cd3715b97bef4a24d"
+observed_at = 1795842802
+output_digest = "sha256:8d36e43e62cfeaa318f6dfd35406f24d12d5924d5e5eb8648c702648efaaadd0"
+excerpt = """
+
+running 6 tests
+test control_absolute_protected_config_delete_is_deny ... ok
+test control_harmless_relative_rm_in_scratchpad_is_allow ... ok
+test git_apply_unsafe_paths_into_claude_dir_is_not_allow ... ok
+test mv_of_worktrees_container_is_not_allow ... ok
+test relative_rm_of_claude_settings_is_not_allow ... ok
+test relative_rm_rf_src_in_main_tree_is_not_allow ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_20261128_detector_relative_protected_targets.rs (target/debug/deps/backlog_20261128_detector_relative_protected_targets-1d4e242ae0e2d350)
+"""
+
+[task.closure.red]
+rev = "f330b1d20f20f67c9b01c85f28984c7905945659"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

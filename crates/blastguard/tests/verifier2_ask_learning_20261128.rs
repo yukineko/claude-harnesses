@@ -114,9 +114,15 @@ fn table_with(e: &Env, name: &str, k: &str) -> PathBuf {
 fn assert_no_ride(name: &str, sibling: Value, probe: Value) {
     let e = env(name);
     let before = decide(&e, &no_table(&e), &probe);
-    assert_ne!(before, "allow", "precondition: probe must not be Allow without a table");
+    assert_ne!(
+        before, "allow",
+        "precondition: probe must not be Allow without a table"
+    );
     let sib_shape = shape(&e, &sibling);
-    assert_eq!(sib_shape["decision"], "ask", "precondition: sibling must Ask: {sib_shape}");
+    assert_eq!(
+        sib_shape["decision"], "ask",
+        "precondition: sibling must Ask: {sib_shape}"
+    );
     let k = sib_shape["shape"].as_str().unwrap().to_string();
     let t = table_with(&e, "t.json", &k);
     let after = decide(&e, &t, &probe);
@@ -168,7 +174,10 @@ fn xargs_stdin_flags_do_not_ride_a_benign_xargs_rm_allow() {
     assert_no_ride(
         "xargs",
         bash(WT, "printf '%s\\n' a b | xargs rm"),
-        bash(WT, "printf -- '-rf\\n/Users/yuki/src/harness\\n' | xargs rm"),
+        bash(
+            WT,
+            "printf -- '-rf\\n/Users/yuki/src/harness\\n' | xargs rm",
+        ),
     );
 }
 

@@ -210,6 +210,14 @@ mod tests {
     #[test]
     fn shell_runs_are_never_eligible() {
         let w = TargetClass::Worktree;
+        // The refusal must come from the ShellFile model, not from the
+        // structural gate (verifier round 7): the command text of each fact
+        // set is one simple static command (`#..` is a comment), and the same
+        // fact set with a Plain tool is eligible.
+        for v in ["bash #26610971178c87de", "sh -e #26610971178c87de"] {
+            assert_eq!(facts(w, &[v]).structure(), Structure::SimpleStatic, "{v}");
+        }
+        assert!(allow_eligible(&facts(w, &["rm -e #26610971178c87de"])));
         assert!(!allow_eligible(&facts(w, &["bash #26610971178c87de"])));
         assert!(!allow_eligible(&facts(w, &["sh -e #26610971178c87de"])));
         assert!(!allow_eligible(&facts(w, &["bash -c #26610971178c87de"])));

@@ -298,6 +298,16 @@ fn r6_ansi_c_escape_hides_an_option_from_the_shape() {
          flags_any = [\"--force\", \"-f\"]\n",
     )
     .unwrap();
+    // Liveness control (verifier round 7): with the same rules file a learned
+    // allow IS honoured for an eligible line, so the "neither is Allow"
+    // asserts below cannot come from a rules file that poisons every Allow.
+    let live = bash(&e.wt, "git add -A");
+    let lk = shape(&e, &live)["shape"].as_str().unwrap().to_string();
+    assert_eq!(
+        decide_with(&e, &table_with(&e, &lk), Some(&plain), &live),
+        "allow",
+        "control: `git add -A` under its own learned entry {lk} with the rules file"
+    );
     for (sibling, probe) in [
         (r"git add $'\x66oo'", r"git add $'\x2dA'"),
         (r"git add $'\x66oo'", r"git add $'\055A'"),

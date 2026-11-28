@@ -123,6 +123,12 @@ mod tests {
 
     #[test]
     fn allow_entry_is_refused_for_guarded_shapes() {
+        // Every refusal below carries the command text of the clean-entry
+        // control (one simple static command): without text a shell call is
+        // refused by the structural gate alone, so a refusal with no text
+        // would hold even with the class / decline / system-harm guard
+        // removed (verifier round 7).
+        let cmd = Some("rm build");
         for class in [
             TargetClass::System,
             TargetClass::ProtectedConfig,
@@ -132,20 +138,37 @@ mod tests {
         ] {
             let s = shape(class, "rm");
             let t = table(&s, Verdict::Allow, 0);
-            assert!(matches!(
-                apply(Decision::ask("q"), &s, false, &t),
-                Applied::Unchanged(Decision::Ask(_))
-            ));
+            assert!(
+                matches!(
+                    apply_with(Decision::ask("q"), &s, false, cmd, &t, &[]),
+                    Applied::Unchanged(Decision::Ask(_))
+                ),
+                "{class:?}"
+            );
         }
         let s = shape(TargetClass::Worktree, "rm");
         // An allow entry that records a decline is inconsistent: not honoured.
         assert!(matches!(
-            apply(Decision::ask("q"), &s, false, &table(&s, Verdict::Allow, 1)),
+            apply_with(
+                Decision::ask("q"),
+                &s,
+                false,
+                cmd,
+                &table(&s, Verdict::Allow, 1),
+                &[]
+            ),
             Applied::Unchanged(Decision::Ask(_))
         ));
         // System harm is refused even with a clean entry.
         assert!(matches!(
-            apply(Decision::ask("q"), &s, true, &table(&s, Verdict::Allow, 0)),
+            apply_with(
+                Decision::ask("q"),
+                &s,
+                true,
+                cmd,
+                &table(&s, Verdict::Allow, 0),
+                &[]
+            ),
             Applied::Unchanged(Decision::Ask(_))
         ));
         // Changed with the structural gate: the clean-entry control now

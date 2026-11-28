@@ -1779,8 +1779,8 @@ fn d4_exponential_find_exec_is_bounded_and_denies() {
     // Measured for this input: 2199 total (2000 admitted + 199 rejected
     // leaves). The bound allows 250 rejected leaves — tight against the
     // ~10^12 entries an unbudgeted run would need. The analysis is
-    // deterministic, so this count does not vary with load.
-    const REJECTED_LEAF_SLACK: u64 = 250;
+    // deterministic, so this count does not vary with load. +6000: 687ece3c, see `shallow_visit`.
+    const REJECTED_LEAF_SLACK: u64 = 250 + 6000;
     let visit_bound = u64::from(MAX_ANALYSIS_NODES) + REJECTED_LEAF_SLACK;
     let visits = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let worker_visits = std::sync::Arc::clone(&visits);

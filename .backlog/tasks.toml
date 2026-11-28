@@ -825,6 +825,8 @@ notes = """Independent verifier r2 of fix-write-targets (043e51270, crates/blast
 created_at = 1795851090
 updated_at = 1795851090
 weight = 0.0
+issue_number = 2025
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2025"
 rev = 0
 
 [task.repro]

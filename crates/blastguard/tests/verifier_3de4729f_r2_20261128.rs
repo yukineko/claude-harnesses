@@ -294,7 +294,6 @@ fn cd_operand_running_relinker_stays_not_allow() {
 /// `argv_is_relink_data`), so the `cd` glob qualifier of round 1's shape is
 /// still open. zsh ran `cd *(e:"ln -s ../tgt d3":)` (observed: d3).
 #[test]
-#[ignore = "RED: fail-open introduced by 3de4729f (Ask at base cf33a5b2c, Allow at 4e06310e7): `cd *(e:' ln -s /etc <abs>/d ':); echo x > <abs>/d/hosts` — line_is_relink_data accepts `cd` without checking its argv with word_is_inert"]
 fn cd_operand_running_relinker_absolute_paths_stays_not_allow() {
     let fx = fixture("cd-abs");
     let s = fx.scratch().to_string_lossy().into_owned();
@@ -320,7 +319,6 @@ fn cd_operand_running_relinker_absolute_paths_stays_not_allow() {
 /// sees them. PRE-EXISTING: every row Allow at base cf33a5b2c AND at
 /// 4e06310e7 (measured 2026-11-28).
 #[test]
-#[ignore = "RED: pre-existing fail-open (Allow at base cf33a5b2c and fix 4e06310e7): a zsh glob qualifier `*(e:' ln … ':)` in an input-redirect word runs ln; the relink layer does not read redirect words"]
 fn input_redirect_glob_qualifier_relinker_stays_not_allow() {
     let fx = fixture("redir-in");
     let s = fx.scratch().to_string_lossy().into_owned();
@@ -357,7 +355,6 @@ const FOR_LIST_NO_PROBE: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: pre-existing fail-open (Allow at base cf33a5b2c and fix 4e06310e7): zsh evaluates a for/select list holding a glob qualifier `*(e:'ln …':)`, `=(ln …)` or `\"${(e)…}\"`, and the data probe only triggers on `$(`/backtick/`<(`/`>(`"]
 fn for_list_zsh_evaluation_without_probe_trigger_stays_not_allow() {
     assert_not_allow("for-noprobe", FOR_LIST_NO_PROBE, "for/select list runs ln");
 }

@@ -322,7 +322,53 @@ command really reaches"
 pub(super) fn line_names_relink_verb(line: &str) -> bool {
     // Also a line whose substitutions / escapes may run a relinker:
     // nested.rs reads those commands (backlog 00c6c2b8).
-    plain_words(line).into_iter().any(is_relink_word) || nested::may_run_nested(line)
+    plain_words(line).into_iter().any(is_relink_word)
+        || nested::may_run_nested(line)
+        || zsh_runs_code(line)
+}
+
+/// Whether `text` holds a zsh construct that runs code while a word is
+/// expanded, wherever the word stands (argv, `cd` operand, redirect word,
+/// `for`/`select`/`case` header): outside every quote a glob qualifier
+/// `(e…)` / `(+…)` glued to a word, or `=(`; outside single quotes the `(e)`
+/// parameter flag `${(…e…)…}`. One helper for every user ([`word_is_inert`],
+/// [`line_is_relink_data`], [`relinked`], [`line_names_relink_verb`]). It
+/// over-approximates (a bash line with such text is read the same), which
+/// only adds Asks (CLAUDE.md §3).
+fn zsh_runs_code(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
+    for (i, &c) in chars.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        let next = chars.get(i + 1).copied();
+        match c {
+            '\\' if !in_s => escaped = true,
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            '=' if !in_s && !in_d && next == Some('(') => return true,
+            '(' if !in_s && !in_d && matches!(next, Some('e' | '+')) => {
+                // `(e`/`(+` at the start of a word is a subshell (`(echo x)`);
+                // glued to a word it is a glob qualifier.
+                let prev = i.checked_sub(1).and_then(|p| chars.get(p)).copied();
+                if prev.is_some_and(|p| !p.is_whitespace() && !";&|(<>$".contains(p)) {
+                    return true;
+                }
+            }
+            '$' if !in_s && next == Some('{') && chars.get(i + 2) == Some(&'(') => {
+                let flags: String = chars[i + 3..].iter().take_while(|&&f| f != ')').collect();
+                // Flags up to the `)`; no closing `)` is undetermined too.
+                let closed = chars[i + 3..].contains(&')');
+                if !closed || flags.contains('e') {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The physical path `word` (an operand of segment `seg_idx`, run in `cwd`)
@@ -430,6 +476,18 @@ fn relinked(
     target_cwd: &CwdState,
     base: Option<&str>,
 ) -> Result<Option<String>, String> {
+    // zsh evaluates code while expanding words of ANY kind (argv, a `cd`
+    // operand, a redirect word, a `for`/`select`/`case` header): the commands
+    // it runs are in no segment this function reads, so which entry they
+    // relink cannot be determined (CLAUDE.md §3).
+    if zsh_runs_code(line) {
+        return Err(
+            "the line holds a zsh construct that runs code while a word is expanded \
+             (a glob qualifier `(e…)`/`(+…)`, `=( )`, or the `(e)` flag), so what it \
+             relinks cannot be read"
+                .to_string(),
+        );
+    }
     let segs = split_segments_with_separators(line);
     let views = compound_views(line);
     let has_loop = segs
@@ -797,6 +855,9 @@ const GIT_NO_WORKTREE_ENTRY: &[&str] = &["commit", "add", "status"];
 /// `#`, `=`, quotes). Undetermined is not inert.
 fn word_is_inert(w: &super::ast::Word) -> bool {
     use super::ast::{Quoting, Value};
+    if zsh_runs_code(&w.raw) {
+        return false;
+    }
     if !matches!(w.value, Value::Literal(_)) {
         // A double-quoted word with only parameter expansions (`"$TASK_ID"`):
         // its value is not re-evaluated, undergoes no globbing, and runs
@@ -904,6 +965,9 @@ fn names_relink_verb(command: &str, line_is_data: bool) -> bool {
 /// other program on the line (a shell, `read`, `export`, `hash`, `alias`, an
 /// undetermined command word) is `false` too.
 fn line_is_relink_data(line: &str) -> bool {
+    if zsh_runs_code(line) {
+        return false;
+    }
     let super::ast::Analysis::Known(script) = super::ast::analyze(line) else {
         return false;
     };

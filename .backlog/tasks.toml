@@ -758,6 +758,8 @@ notes = "Verifier r3 of 5c848034 (bd1bdd7a9), crates/blastguard/tests/verifier_5
 created_at = 1795888611
 updated_at = 1795888611
 weight = 0.0
+issue_number = 2032
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2032"
 rev = 0
 
 [task.repro]

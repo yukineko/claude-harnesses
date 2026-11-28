@@ -336,18 +336,59 @@ pub(super) fn line_names_relink_verb(line: &str) -> bool {
 /// over-approximates (a bash line with such text is read the same), which
 /// only adds Asks (CLAUDE.md §3).
 fn zsh_runs_code(line: &str) -> bool {
-    // Cheap pre-filter: every construct below holds a `(` or a `~`.
-    if !line.contains(['(', '~']) {
+    // Cheap pre-filter: every construct below holds a `(`, `~` or backtick.
+    if !line.contains(['(', '~', '`']) {
         return false;
     }
-    match super::ast::analyze(line) {
+    // A function definition is evaluated too (its words are listed), so the
+    // `f()` header is never read as a word.
+    match super::ast::analyze_with_function_definitions(line) {
         // Only the words the shell pathname-expands are read: not a
         // here-document body, an assignment's right side (`arr=(a b)`) or a
         // `[[ =~ ]]` operand, which zsh never globs.
-        super::ast::Analysis::Known(script) => script.field_words.iter().any(|w| word_evaluates(w)),
-        // The words cannot be listed: read every blank-separated piece.
-        super::ast::Analysis::Undetermined(_) => line.split_whitespace().any(word_evaluates),
+        super::ast::Analysis::Known(script) => {
+            script.field_words.iter().any(|w| word_evaluates(w))
+                || script.commands.iter().any(prompt_expands_substitution)
+        }
+        // The words cannot be listed: read every blank-separated piece
+        // (except a function header `name()`).
+        super::ast::Analysis::Undetermined(_) => line
+            .split_whitespace()
+            .any(|w| !is_function_header(w) && word_evaluates(w)),
     }
+}
+
+/// `name()` — the header of a POSIX function definition, not a word.
+fn is_function_header(w: &str) -> bool {
+    w.strip_suffix("()").is_some_and(|n| {
+        !n.is_empty()
+            && n.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.:".contains(c))
+    })
+}
+
+/// `print -P …` expands prompt escapes and, under `promptsubst`, runs a
+/// `$( )` / backtick / `${ }` held in its operand whatever the quoting.
+fn prompt_expands_substitution(c: &super::ast::SimpleCommand) -> bool {
+    use super::ast::Value;
+    let lit = |w: &super::ast::Word| match &w.value {
+        Value::Literal(s) => s.clone(),
+        Value::Undetermined(_) => w.raw.clone(),
+    };
+    match c.argv.first().map(lit).as_deref() {
+        Some("print") => {}
+        _ => return false,
+    }
+    let flags_p = c.argv[1..].iter().any(|w| {
+        let s = lit(w);
+        s.starts_with('-') && s.contains('P')
+    });
+    flags_p
+        && c.argv[1..].iter().any(|w| {
+            [&w.raw, &lit(w)]
+                .iter()
+                .any(|s| s.contains("$(") || s.contains('`') || s.contains("${"))
+        })
 }
 
 /// Whether the shell word `raw` (as written) may run code while it is
@@ -391,11 +432,25 @@ fn word_evaluates(raw: &str) -> bool {
             }
             '$' if next == Some('~') => return true,
             '$' if next == Some('{') && matches!(chars.get(i + 2), Some('~' | '(')) => return true,
-            '$' | '<' | '>' if !in_d && next == Some('(') || c == '$' && next == Some('(') => {
-                i = skip_parens(&chars, i + 1);
+            // `${ … }`: its operand text is not a glob (`${F:-(none)}`).
+            '$' if next == Some('{') => {
+                i = skip_group(&chars, i + 1, '{', '}');
                 continue;
             }
-            '(' if !in_d && i > 0 => return true,
+            '$' | '<' | '>' if next == Some('(') && (c == '$' || !in_d) => {
+                i = skip_group(&chars, i + 1, '(', ')');
+                continue;
+            }
+            // A word-leading `=(` is a process substitution.
+            '(' if !in_d && i == 1 && chars[0] == '=' => return true,
+            '(' if !in_d && i > 0 => match qualifier_group(&chars, i) {
+                Some(end) if group_runs_code(&chars[i + 1..end]) => return true,
+                Some(end) => {
+                    i = end + 1;
+                    continue;
+                }
+                None => return true,
+            },
             _ => {}
         }
         i += 1;
@@ -403,21 +458,47 @@ fn word_evaluates(raw: &str) -> bool {
     false
 }
 
-/// Index just past the `)` matching the `(` at `open` (the end when none).
-fn skip_parens(chars: &[char], open: usize) -> usize {
-    let mut depth = 0usize;
-    let mut i = open;
+/// The index of the `)` closing the `(` at `open`, when there is one.
+fn qualifier_group(chars: &[char], open: usize) -> Option<usize> {
+    let end = skip_group(chars, open, '(', ')');
+    (end > open + 1 && chars.get(end - 1) == Some(&')')).then_some(end - 1)
+}
+
+/// Whether the text of a non-leading `(…)` group may be a glob qualifier
+/// list that runs code: an `e` followed by its (non-alphanumeric) delimiter,
+/// or a `+function` — whatever flags precede it (`e`, `.e`, `Ne`, `^e`,
+/// `#qe`). A group of plain pattern text (`(.)`, `(N)`, `(x)`, `(err|warn)`)
+/// runs nothing.
+fn group_runs_code(inner: &[char]) -> bool {
+    inner.contains(&'+')
+        || inner
+            .iter()
+            .enumerate()
+            .any(|(k, &c)| c == 'e' && inner.get(k + 1).is_some_and(|n| !n.is_alphanumeric()))
+}
+
+/// Index just past the `close` matching the `open` at `at` (the end when
+/// none), skipping quoted text and backslash escapes.
+fn skip_group(chars: &[char], at: usize, open: char, close: char) -> usize {
+    let (mut depth, mut i) = (0usize, at);
+    let (mut in_s, mut in_d) = (false, false);
     while i < chars.len() {
-        match chars[i] {
-            '\\' => i += 1,
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return i + 1;
-                }
+        let c = chars[i];
+        if in_s {
+            in_s = c != '\'';
+        } else if c == '\\' {
+            i += 1;
+        } else if c == '\'' && !in_d {
+            in_s = true;
+        } else if c == '"' {
+            in_d = !in_d;
+        } else if !in_d && c == open {
+            depth += 1;
+        } else if !in_d && c == close {
+            depth -= 1;
+            if depth == 0 {
+                return i + 1;
             }
-            _ => {}
         }
         i += 1;
     }

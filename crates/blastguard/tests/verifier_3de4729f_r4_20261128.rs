@@ -248,7 +248,6 @@ const FP_FUNCTION_DEFINITION: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: FP — `name()` function definition makes the fallback piece `f()` read as a zsh qualifier (Allow at base cf33a5b2c, Ask at 6fdb22556)"]
 fn fp_function_definition_is_allow() {
     let fx = fixture("fp-fn");
     expect(
@@ -264,7 +263,6 @@ fn fp_function_definition_is_allow() {
 const FP_PAREN_IN_PARAM_OPERAND: &[&str] = &["echo ${FOO:-(none)} > f", "echo ${var%%(*} > f"];
 
 #[test]
-#[ignore = "RED: FP — `(` inside an unquoted `${…}` operand is read as a glob qualifier (Allow at base, Ask at 6fdb22556)"]
 fn fp_paren_in_param_operand_is_allow() {
     let fx = fixture("fp-param");
     expect(
@@ -281,7 +279,6 @@ fn fp_paren_in_param_operand_is_allow() {
 const FP_NON_EXECUTING_PAREN_GLOB: &[&str] = &["ls *(.) > f", "ls **/*.rs(N) > f", "ls !(x) > f"];
 
 #[test]
-#[ignore = "RED: FP — non-executing qualifier / extglob read as code (Allow at base, Ask at 6fdb22556)"]
 fn fp_non_executing_paren_glob_is_allow() {
     let fx = fixture("fp-glob");
     expect(
@@ -297,7 +294,6 @@ fn fp_non_executing_paren_glob_is_allow() {
 const FP_SUBST_QUOTED_PAREN: &[&str] = &["echo $(printf ')(') > f"];
 
 #[test]
-#[ignore = "RED: FP — skip_parens counts parens inside quotes (Allow at base, Ask at 6fdb22556)"]
 fn fp_subst_quoted_paren_is_allow() {
     let fx = fixture("fp-subst");
     expect(
@@ -412,7 +408,6 @@ fn failopen_subst_quoted_paren(s: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED: fail-open (pre-existing, Allow at base and 6fdb22556) — quoted paren in $( ) hides a following (e:…) qualifier from word_evaluates"]
 fn failopen_subst_quoted_paren_stays_not_allow() {
     let fx = fixture("fo-subst");
     expect(
@@ -426,7 +421,6 @@ fn failopen_subst_quoted_paren_stays_not_allow() {
 /// `setopt promptsubst; print -P '$(ln …)'` (observed executing: b4).
 /// PRE-EXISTING: Allow at base AND 6fdb22556 (measured 2026-11-28).
 #[test]
-#[ignore = "RED: fail-open (pre-existing, Allow at base and 6fdb22556) — print -P under promptsubst runs a quoted $( )"]
 fn failopen_print_p_promptsubst_stays_not_allow() {
     let fx = fixture("fo-printp");
     let s = fx.s();

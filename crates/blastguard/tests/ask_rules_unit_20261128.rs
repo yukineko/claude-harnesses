@@ -1,4 +1,3 @@
-#![cfg(feature = "ask-rules-red")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! RED(ask-rules): the pure judging module `blastguard::askrules`
 //! (spec docs/specs/blastguard-ask-learning.md, "Rule files and the judging
@@ -51,7 +50,6 @@ fn is_allow(j: &Judgement) -> bool {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn allow_rule_matches_structured_facts() {
     let rs = RuleSet::from_toml(&allow_git_add());
     assert!(rs.allow_enabled(), "warnings: {:?}", rs.warnings());
@@ -69,7 +67,6 @@ fn allow_rule_matches_structured_facts() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn deny_rule_matches() {
     let rs = RuleSet::from_toml(
         r#"
@@ -88,7 +85,6 @@ class = ["home"]
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn deny_beats_allow_in_one_file_and_across_files() {
     let both = format!(
         "{}\n[[rule]]\ndecision = \"deny\"\nreason = \"no\"\n[rule.match]\ntool = \"git\"\nsub = \"add\"\n",
@@ -107,7 +103,6 @@ fn deny_beats_allow_in_one_file_and_across_files() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn never_allowed_classes_ignore_allow_rules() {
     let rs = RuleSet::from_toml(&allow_git_add());
     assert!(is_allow(&judge(
@@ -133,7 +128,6 @@ fn never_allowed_classes_ignore_allow_rules() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn system_harm_never_allowed() {
     let rs = RuleSet::from_toml(&allow_git_add());
     let f = Facts::from_shape(&shape(TargetClass::Worktree, &["git add -A"]), true);
@@ -146,7 +140,6 @@ fn system_harm_never_allowed() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn unresolved_verb_never_matches_allow() {
     let rs = RuleSet::from_toml(&allow_git_add());
     assert!(is_allow(&judge(
@@ -168,7 +161,6 @@ fn unresolved_verb_never_matches_allow() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn flags_any_none_and_program() {
     let rs = RuleSet::from_toml(
         r##"
@@ -208,7 +200,6 @@ class = ["worktree"]
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn multi_verb_allow_needs_every_verb_deny_needs_any() {
     let rs = RuleSet::from_toml(&allow_git_add());
     let w = TargetClass::Worktree;
@@ -227,7 +218,6 @@ fn multi_verb_allow_needs_every_verb_deny_needs_any() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn no_regex_no_raw_text_matching() {
     // `tool` is exact equality, never a pattern.
     let rs = RuleSet::from_toml(
@@ -291,7 +281,6 @@ fn defective_files() -> Vec<(&'static str, String)> {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn defective_file_disables_allow_keeps_deny() {
     let f_allow = facts(TargetClass::Worktree, &["git add -A"]);
     let f_deny = facts(TargetClass::Worktree, &["rm"]);
@@ -314,7 +303,6 @@ fn defective_file_disables_allow_keeps_deny() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn unparsable_file_allows_nothing_and_says_why() {
     let clean = RuleSet::from_toml(&allow_git_add());
     assert!(is_allow(&judge(
@@ -329,7 +317,6 @@ fn unparsable_file_allows_nothing_and_says_why() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): blastguard::askrules does not exist yet"]
 fn empty_rule_set_is_no_match_and_enabled() {
     let rs = RuleSet::from_toml("");
     assert!(rs.warnings().is_empty(), "{:?}", rs.warnings());
@@ -367,7 +354,6 @@ fn with_cmd(verbs: &[&str], cmd: &str) -> Facts {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): except / regex not implemented"]
 fn except_entry_turns_an_allow_into_no_match() {
     let rs = RuleSet::from_toml(ALLOW_WITH_EXCEPT);
     assert!(rs.allow_enabled(), "{:?}", rs.warnings());
@@ -388,7 +374,6 @@ fn except_entry_turns_an_allow_into_no_match() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): except / regex not implemented"]
 fn deny_table_and_not_learnable_with_regex() {
     let rs = RuleSet::from_toml(
         r#"
@@ -437,7 +422,6 @@ command_regex = '\b(ba|z|fi)?sh\s+-c\b'
 }
 
 #[test]
-#[ignore = "RED(ask-rules): except / regex not implemented"]
 fn regex_in_an_allow_match_disables_allow_for_the_file() {
     for key in ["command_regex", "verbs_regex", "rule_regex", "class_regex"] {
         let text = format!(
@@ -459,7 +443,6 @@ fn regex_in_an_allow_match_disables_allow_for_the_file() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): except / regex not implemented"]
 fn broken_or_unevaluable_restrictive_regex_counts_as_matched() {
     // canary: clean file allows
     let ok = RuleSet::from_toml(&allow_git_add());
@@ -495,7 +478,6 @@ fn broken_or_unevaluable_restrictive_regex_counts_as_matched() {
 /// Positive allow-list (spec "Positive allow-list"): only fully modelled
 /// tools in a confirmed class can match an Allow rule, however broad.
 #[test]
-#[ignore = "RED(ask-rules): positive allow-list not implemented"]
 fn only_modelled_tools_and_confirmed_classes_are_allow_eligible() {
     let g = tool_rule("git");
     assert!(is_allow(&judge(

@@ -36,6 +36,7 @@
 //! calls it gets the gate unchanged.
 
 pub mod approve;
+pub mod askrules;
 pub mod deletion;
 pub mod detect;
 pub mod exclude;

@@ -248,7 +248,6 @@ fn control_no_rules_file_changes_nothing() {
 // --------------------------------------------------------------------- RED
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn allow_rule_turns_ask_into_allow() {
     let e = env("allow");
     let p = write_rules(&e, "r.toml", &canary_rule(&e));
@@ -260,7 +259,6 @@ fn allow_rule_turns_ask_into_allow() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn deny_rule_turns_ask_into_deny_with_its_reason() {
     let e = env("deny");
     let p = write_rules(
@@ -283,7 +281,6 @@ fn deny_rule_turns_ask_into_deny_with_its_reason() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn deny_wins_over_allow_for_the_same_shape() {
     let e = env("both");
     let text = format!(
@@ -297,7 +294,6 @@ fn deny_wins_over_allow_for_the_same_shape() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn deny_rule_applies_to_main_tree_class() {
     let e = env("denymain");
     let p = write_rules(
@@ -310,7 +306,6 @@ fn deny_rule_applies_to_main_tree_class() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn main_tree_class_ignores_allow_rules() {
     let e = env("mainallow");
     let (_, class, _) = ask_shape(&e, &add_in_main(&e));
@@ -332,7 +327,6 @@ fn main_tree_class_ignores_allow_rules() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn unresolved_question_mark_shape_ignores_allow_rules() {
     let e = env("qmark");
     let cmd = bash(&e.wt, "xargs rm");
@@ -359,7 +353,6 @@ fn unresolved_question_mark_shape_ignores_allow_rules() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn unknown_key_disables_allow_and_says_why() {
     let e = env("unknownkey");
     let good = write_rules(&e, "good.toml", &canary_rule(&e));
@@ -387,7 +380,6 @@ fn unknown_key_disables_allow_and_says_why() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn unparsable_or_unreadable_file_disables_allow() {
     let e = env("unparsable");
     let good = write_rules(&e, "good.toml", &canary_rule(&e));
@@ -410,7 +402,6 @@ fn unparsable_or_unreadable_file_disables_allow() {
 }
 
 #[test]
-#[ignore = "RED(ask-rules): rule files are not read yet"]
 fn shape_not_named_by_any_rule_stays_ask() {
     let e = env("nomatch");
     let p = write_rules(&e, "r.toml", &canary_rule(&e));
@@ -423,7 +414,6 @@ fn shape_not_named_by_any_rule_stays_ask() {
 /// Allow (the bundled path inside a repo, and the file BLASTGUARD_ASK_RULES
 /// names).
 #[test]
-#[ignore = "RED(ask-rules): rule file paths are not protected yet"]
 fn rules_files_are_protected_from_writes() {
     let e = env("protected");
     let bundled = e.wt.join("crates/blastguard/rules/ask-rules.toml");
@@ -459,7 +449,6 @@ fn rules_files_are_protected_from_writes() {
 
 /// `except` / `[[deny]]` / `not_learnable` with `command_regex`, end to end.
 #[test]
-#[ignore = "RED(ask-rules): except / regex not implemented"]
 fn except_and_regex_deny_through_the_hook() {
     let e = env("except");
     let plain = add_in_wt(&e);
@@ -505,7 +494,6 @@ fn except_and_regex_deny_through_the_hook() {
 /// maximally broad one naming only its tool. Each case also asserts the
 /// canary, and that the case IS an Ask to begin with.
 #[test]
-#[ignore = "RED(ask-rules): positive allow-list not implemented"]
 fn unmodelled_wrappers_and_interpreters_never_match_allow() {
     let e = env("allowlist");
     std::fs::write(e.wt.join("x.fish"), "git add -A\n").unwrap();

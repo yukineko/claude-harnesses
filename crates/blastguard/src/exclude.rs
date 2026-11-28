@@ -111,6 +111,15 @@ const PROTECTED_GLOBS: &[&str] = &[
     ".blastguard/learned/**",
     "**/.blastguard/learned",
     "**/.blastguard/learned/**",
+    // ---- the human Ask rules (askrules, user ruling 2026-11-28) ----
+    // `crates/blastguard/rules/ask-rules.toml` turns an Ask into an Allow just
+    // as the learned table does, so its directory is protected config too. The
+    // test override `BLASTGUARD_ASK_RULES=<path>` is protected by
+    // [`is_ask_rules_override`], which reads the environment.
+    "crates/blastguard/rules",
+    "crates/blastguard/rules/**",
+    "**/crates/blastguard/rules",
+    "**/crates/blastguard/rules/**",
     // `.git/config` decides `core.hooksPath` (and other hook-adjacent keys
     // such as `core.fsmonitor`): one appended `[core] hooksPath = /dev/null`
     // disables every git hook, `.githooks/` included, without touching either
@@ -647,6 +656,9 @@ pub fn is_config_file(path: &str) -> bool {
 /// have thrown away (`.claude/hooks/sub/..` matches `.claude/hooks/**` only
 /// before resolution). Checking one alone would trade one hole for another.
 pub fn is_protected_path(path: &str) -> bool {
+    if is_ask_rules_override(path) {
+        return true;
+    }
     let set = match protected_set() {
         Determination::Known(set) => set,
         // The protected list could not be compiled, so NO path was tested
@@ -663,6 +675,28 @@ pub fn is_protected_path(path: &str) -> bool {
     }
     let resolved = resolve_parents(&collapsed);
     !resolved.is_empty() && resolved != collapsed && set.is_match(&resolved)
+}
+
+/// True when `path` names the file `BLASTGUARD_ASK_RULES` points at (the
+/// override of the human Ask rules): writing it is a self-grant exactly like
+/// writing the bundled file. Matched on the [`collapse`]d and the
+/// `..`-resolved spelling of both sides (union = restrictive direction).
+fn is_ask_rules_override(path: &str) -> bool {
+    let Ok(target) = std::env::var("BLASTGUARD_ASK_RULES") else {
+        return false;
+    };
+    if target.trim().is_empty() {
+        return false;
+    }
+    let spellings = |p: &str| {
+        let c = collapse(p);
+        let r = resolve_parents(&c);
+        [c, r]
+    };
+    let want = spellings(&target);
+    let have = spellings(path);
+    have.iter()
+        .any(|h| !h.is_empty() && want.iter().any(|w| w == h))
 }
 
 /// True when `path` is, or lies under, a `.github/workflows` directory (GitHub

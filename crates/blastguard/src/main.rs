@@ -383,7 +383,7 @@ fn run() {
         _ => shape_of_call(&input, &decision),
     };
     let (decision, learned) =
-        match learned_overlay(decision, shape.as_ref(), &raw, subagent, driver) {
+        match learned_overlay(decision, shape.as_ref(), &input, &raw, subagent, driver) {
             Some(x) => x,
             // A learned Allow, recorded in the block log: nothing is printed.
             None => return,
@@ -457,6 +457,7 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
 fn learned_overlay(
     decision: Decision,
     shape: Option<&harness_core::asklearn::Shape>,
+    input: &HookInput,
     raw: &str,
     subagent: bool,
     driver: bool,
@@ -466,8 +467,33 @@ fn learned_overlay(
     };
     let orig_reason = orig_reason.clone();
     let table = harness_core::asklearn::read_table(&harness_core::asklearn::table_path());
+    // The human rules (bundled file, or the test override). Their defects go
+    // to stderr with the reason: a silent skip would read as "no rule".
+    let human = blastguard::askrules::load_human(
+        std::env::var(blastguard::askrules::RULES_VAR)
+            .ok()
+            .as_deref(),
+    );
+    for w in human.warnings() {
+        eprintln!("blastguard: ask-rules: {w}");
+    }
+    // `command_regex` searches the Bash command. A Bash call whose command
+    // cannot be read carries none (counts as matched, the restrictive side);
+    // a file tool has no command text, so the empty text is searched.
+    let command = if input.tool_name == "Bash" {
+        bash_command(input)
+    } else {
+        Some(String::new())
+    };
     let system_harm = decision.is_system_harm();
-    match blastguard::learned::apply(decision, shape, system_harm, &table) {
+    match blastguard::learned::apply_with(
+        decision,
+        shape,
+        system_harm,
+        command.as_deref(),
+        &table,
+        &[&human],
+    ) {
         blastguard::learned::Applied::Unchanged(d) => Some((d, false)),
         blastguard::learned::Applied::Deny(r) => Some((Decision::Deny(r), true)),
         blastguard::learned::Applied::Allow(reason) => {

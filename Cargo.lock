@@ -222,7 +222,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.986"
+version = "0.2.987"
 dependencies = [
  "brush-parser",
  "globset",
@@ -230,10 +230,12 @@ dependencies = [
  "overwatch",
  "proc-macro2",
  "progeffect",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "toml 0.8.23",
  "trybuild",
 ]
 

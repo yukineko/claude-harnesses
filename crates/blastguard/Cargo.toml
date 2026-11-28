@@ -3,7 +3,7 @@
 # 1.85, so this crate sets its own (precedent: crates/budgetguard sets 1.89).
 rust-version = "1.88"
 name = "blastguard"
-version = "0.2.986"
+version = "0.2.987"
 edition = "2021"
 description = "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary."
 license = "MIT"
@@ -18,17 +18,15 @@ overwatch = { path = "../overwatch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 globset = "0.4"
+# askrules: restrictive-side regex conditions and the TOML rule files.
+regex = { workspace = true }
+toml = { workspace = true }
 sha2 = { workspace = true }
 # Shell AST for detect::ast (the single parser input for migrated detectors).
 brush-parser = { version = "=0.4.0", default-features = false }
 # Stage S5: embedded programs (inline Python) read with a real parser; the
 # shared per-language parser crate (user ruling 2026-11-17).
 progeffect = { path = "../progeffect" }
-
-[features]
-# Gates tests/ask_rules_unit_20261128.rs, which cannot compile until
-# `blastguard::askrules` exists. Remove together with that file's gate.
-ask-rules-red = []
 
 [dev-dependencies]
 trybuild = "1"

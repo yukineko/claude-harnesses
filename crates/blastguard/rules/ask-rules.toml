@@ -1,0 +1,50 @@
+# Human rules for blastguard Asks (docs/specs/blastguard-ask-learning.md,
+# "Rule files and the judging module"). Read by crates/blastguard/src/askrules.
+#
+# This file is protected config: a Write / Edit / shell write to it is never
+# Allow. Test override: env BLASTGUARD_ASK_RULES=<path> replaces it.
+#
+# Evaluation: invariants + the positive allow-list (askrules/builtin.rs
+# MODELLED_TOOLS) -> deny rules -> not_learnable -> allow rules whose `except`
+# list has no matching entry -> no match (the Ask stands).
+#
+# Regex (`*_regex`) is accepted only on the restrictive side: deny,
+# not_learnable and `except` entries. Rust `regex` syntax, unanchored search.
+# A regex that does not compile counts as MATCHED.
+#
+# The entries below are the reach paths found by the ask-learning verifier
+# rounds r1-r4 (2026-11-28). The positive allow-list is the primary defence:
+# none of these shapes is Allow-eligible anyway. They are the cheap, visible,
+# editable second layer, and they use `not_learnable` (the Ask stands) rather
+# than `deny`, because a Deny here would also refuse the harmless first ask of
+# the same command.
+
+[[not_learnable]]
+reason = "r4: `env -C <dir>` / `env -S <string>` change the directory or run a command the shape does not pin"
+[not_learnable.match]
+command_regex = '\benv\s+-[^ ]*[CS]'
+
+[[not_learnable]]
+reason = "r4: `find -exec` runs a command the shape does not pin"
+[not_learnable.match]
+command_regex = '\bfind\b.*-exec'
+
+[[not_learnable]]
+reason = "r4: inline shell (`sh -c`, `bash -c`, `zsh -c`, `fish -c`) runs a body whose effect the shape does not pin"
+[not_learnable.match]
+command_regex = '\b(ba|z|fi)?sh\s+-c\b'
+
+[[not_learnable]]
+reason = "r4: pwsh is not a modelled interpreter"
+[not_learnable.match]
+command_regex = '\bpwsh\b'
+
+[[not_learnable]]
+reason = "r4: a wrapper in front of a directly executed script (`timeout 5 ./run.sh`) hides which script runs"
+[not_learnable.match]
+command_regex = '\b(env|timeout|nohup|nice|command|exec|sudo|xargs)\b[^|;&]*\s\.{0,2}/\S+\.(sh|bash|zsh|py|rb|pl)\b'
+
+[[not_learnable]]
+reason = "r4: fish / PowerShell script files are not modelled"
+[not_learnable.match]
+command_regex = '\.(fish|ps1)\b'

@@ -830,3 +830,34 @@ exit 101:
     Finished `release` profile [optimized] target(s) in 27.67s
      Running tests/backlog_20261128_wrapper_force_push.rs (target/release/deps/backlog_20261128_wrapper_force_push-2d41c258c7c5a83b)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_wrapper_force_push`"""
+
+[[task]]
+id = "76dd7aea"
+title = "blastguard: git push deleting a remote branch (:main / --delete main) is Allow while force push is Ask/Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795827516
+updated_at = 1795827516
+weight = 0.0
+issue_number = 2009
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2009"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_push_delete_remote_branch -- --include-ignored"
+rev = "5e609cfbf869dc82cbf54192a1733db5dec0dfa5"
+observed_at = 1795827516
+detail = """
+exit 101: .2.985 (/Users/yuki/src/.harness-worktrees/red-push-delete-main/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running tests/backlog_20261128_push_delete_remote_branch.rs (target/debug/deps/backlog_20261128_push_delete_remote_branch-fc1a37257cbf6f54)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_push_delete_remote_branch`"""

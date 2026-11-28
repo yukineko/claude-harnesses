@@ -56,7 +56,7 @@ fn control_plain_push_stays_allow() {
 }
 
 #[test]
-#[ignore = "RED(BACKLOG_ID): git push deleting remote main is Allow while force push is Ask/Deny"]
+#[ignore = "RED(76dd7aea): git push deleting remote main is Allow while force push is Ask/Deny"]
 fn delete_remote_main_is_ask_or_deny_in_main_mode() {
     let bad: Vec<String> = DELETE_MAIN
         .iter()
@@ -67,7 +67,7 @@ fn delete_remote_main_is_ask_or_deny_in_main_mode() {
 }
 
 #[test]
-#[ignore = "RED(BACKLOG_ID): git push deleting remote main is Allow while force push is Ask/Deny"]
+#[ignore = "RED(76dd7aea): git push deleting remote main is Allow while force push is Ask/Deny"]
 fn delete_remote_main_is_deny_in_subagent_mode() {
     let bad: Vec<String> = DELETE_MAIN
         .iter()

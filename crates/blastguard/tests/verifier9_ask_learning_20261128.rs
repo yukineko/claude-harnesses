@@ -73,7 +73,8 @@ fn env_prod(name: &str) -> Env {
     git(&main, &["commit", "-q", "-m", "i"]);
     let wt = home.join("src").join(".harness-worktrees").join("wt");
     git(&main, &["worktree", "add", "-q", wt.to_str().unwrap()]);
-    let sp = root.join("scratchpad");
+    // fixture re-anchored 2026-11-28 (leader ruling): Scratchpad is the session's own scratchpad only
+    let sp = root.join(SID).join("scratchpad");
     std::fs::create_dir_all(&sp).unwrap();
     Env {
         _dir: dir,

@@ -101,7 +101,8 @@ fn env_prod(name: &str) -> Env {
     std::fs::create_dir_all(wt.join("build")).unwrap();
     std::fs::create_dir_all(wt.join("target").join("debug")).unwrap();
     std::fs::write(wt.join("new.rs"), "n").unwrap();
-    let sp = root.join("scratchpad");
+    // fixture re-anchored 2026-11-28 (leader ruling): Scratchpad is the session's own scratchpad only
+    let sp = root.join(SID).join("scratchpad");
     std::fs::create_dir_all(sp.join("build")).unwrap();
     Env {
         _dir: dir,

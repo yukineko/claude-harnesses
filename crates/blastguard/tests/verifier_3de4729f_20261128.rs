@@ -200,7 +200,6 @@ const ZSH_E_QUALIFIER: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "RED: fail-open of 3de4729f — zsh *(e:'CODE':) glob qualifier inside a listed data program's argv runs a relinker; line_is_relink_data reads the line as data so `> d/hosts` is Allow (base: Ask)"]
 fn zsh_glob_qualifier_e_running_relinker_on_data_line_stays_not_allow() {
     let fx = fixture("zsh-e");
     let bad = not_in(&fx, &in_scratch(&fx, ZSH_E_QUALIFIER), &["ask", "deny"]);

@@ -762,6 +762,28 @@ fn is_relink_word(word: &str) -> bool {
 /// `--output=<file>` makes them create a file anywhere.
 const GIT_NO_WORKTREE_ENTRY: &[&str] = &["commit", "add", "status"];
 
+/// Whether the shell evaluates nothing in `w` before the program sees it: a
+/// determined literal that is wholly single-/double-/ANSI-C-quoted, or whose
+/// spelling holds no character the shell expands or interprets (glob `*?[`,
+/// `(`, `)`, `{`, `}`, `$`, backtick, `~`, `\`, `<`, `>`, `|`, `&`, `;`, `!`,
+/// `#`, `=`, quotes). Undetermined is not inert.
+fn word_is_inert(w: &super::ast::Word) -> bool {
+    use super::ast::{Quoting, Value};
+    if !matches!(w.value, Value::Literal(_)) {
+        // A double-quoted word with only parameter expansions (`"$TASK_ID"`):
+        // its value is not re-evaluated, undergoes no globbing, and runs
+        // nothing; any command substitution (`` ` `` or `$(`, which also
+        // covers `$((`) is not inert. Any other undetermined word is not.
+        return w.quoting == Quoting::Double && !w.raw.contains('`') && !w.raw.contains("$(");
+    }
+    match w.quoting {
+        Quoting::Single | Quoting::Double | Quoting::AnsiC => true,
+        Quoting::Unquoted | Quoting::Mixed => !w
+            .raw
+            .contains(|c: char| "*?[](){}$`~\\<>|&;!#='\"".contains(c)),
+    }
+}
+
 /// Whether the simple command `c` is one whose argv is DATA for this layer:
 /// a program that runs no argument under any option and creates, renames or
 /// replaces no work-tree entry other than through a redirect (judged on its
@@ -784,6 +806,12 @@ fn argv_is_relink_data(c: &super::ast::SimpleCommand) -> bool {
         _ => None,
     };
     if !c.assignments.is_empty() {
+        return false;
+    }
+    // Every word must be inert at run time: a shell expands an unquoted word
+    // (zsh `*(e:' ln … ':)` glob qualifier, `~`, `{a,b}`, `$`, backtick) before
+    // the program runs, and may run code doing so. Quoted words are data.
+    if !c.argv.iter().all(word_is_inert) {
         return false;
     }
     let Some(head) = word(0) else {

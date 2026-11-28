@@ -741,3 +741,32 @@ exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s
      Running tests/backlog_20261128_detector_wrapper_system_harm_deny.rs (target/debug/deps/backlog_20261128_detector_wrapper_system_harm_deny-f48156f04a86cc88)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_system_harm_deny`"""
+
+[[task]]
+id = "3221b79b"
+title = "blastguard fail-open: xcrun/watch/caffeinate/arch/chronic/script/unbuffer wrapper makes main-tree git add -A Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1795830761
+updated_at = 1795830761
+weight = 0.0
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage -- --ignored"
+rev = "cace36ec502ddc2ba753ed0b118b06bca6dbb120"
+observed_at = 1795830761
+detail = """
+exit 101: i/src/.harness-worktrees/red-detector-3/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_20261128_detector_wrapper_whole_tree_stage.rs (target/debug/deps/backlog_20261128_detector_wrapper_whole_tree_stage-e1147e0d3aa537be)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_wrapper_whole_tree_stage`"""

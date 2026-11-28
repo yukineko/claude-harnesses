@@ -772,3 +772,34 @@ exit 101: 0.2.1012 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/cra
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.97s
      Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-66b9e1fbd52ee302)
 error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""
+
+[[task]]
+id = "0e79c339"
+title = "blastguard detector FP: output redirect turns scratchpad 'rm -rf build' Ask into Deny (rm-recursive)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured on main b19e77851 (RED tests e897078e0/eebe13572, crates/blastguard/tests/backlog_20261128_detector_redirect_shapes.rs, no learned table). cwd = <root>/scratchpad under /private/tmp/claude-askrules: 'rm -rf build' is Ask, but 'rm -rf build 2>&1' and 'rm -rf build > log' are Deny. A redirect of rm's output does not change what rm deletes. Reported by independent verifier on fp-ask-rules (verifier9_ask_learning_20261128.rs r9_detector_redirect_turns_scratchpad_rm_ask_into_deny)."
+created_at = 1795841017
+updated_at = 1795841017
+weight = 0.0
+issue_number = 2021
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2021"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_redirect_shapes d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny -- --ignored"
+rev = "bd213c9bc85bfc5bfb8f47eaf8ecee01b330b516"
+observed_at = 1795841017
+detail = """
+exit 101: 0.2.1013 (/Users/yuki/src/.harness-worktrees/red-redirect-detector/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.26s
+     Running tests/backlog_20261128_detector_redirect_shapes.rs (target/debug/deps/backlog_20261128_detector_redirect_shapes-6a284a858e8f7598)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_redirect_shapes`"""

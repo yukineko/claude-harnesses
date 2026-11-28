@@ -250,7 +250,7 @@ fn d2_redirect_after_git_add_all_keeps_whole_tree_ask() {
 }
 
 #[test]
-#[ignore = "RED: output redirect turns scratchpad `rm -rf build` Ask into Deny"]
+#[ignore = "RED(0e79c339): output redirect turns scratchpad `rm -rf build` Ask into Deny"]
 fn d3_output_redirect_does_not_turn_scratchpad_rm_ask_into_deny() {
     let e = env("d3");
     assert_eq!(

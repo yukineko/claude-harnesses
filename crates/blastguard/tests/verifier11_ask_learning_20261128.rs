@@ -516,7 +516,7 @@ fn r11_fp_relative_paths_worktree_is_a_linked_worktree() {
 /// in the main tree's git dir). Expectation (verifier's analogy to
 /// core.hooksPath, confirm when fixing): not Allow.
 #[test]
-#[ignore = "detector, filed separately"]
+#[ignore = "RED(5bef2229): detector — git config core.worktree <main> is Allow"]
 fn r11_detector_git_config_core_worktree_is_allow() {
     let e = env_prod("cfgwt");
     fixtures(&e);

@@ -414,7 +414,7 @@ fn r13_detector_forged_main_subdir_root() {
 /// `rm` in wt is judged by the detector (no Ask, so no learned key exists for
 /// it): the class is asserted directly and the no-table decision is checked.
 #[test]
-#[ignore = "detector + class, filed separately"]
+#[ignore = "RED(d5cd45de): detector + class — rm -rf of own dir holding another linked checkout is Allow"]
 fn r13_rm_of_own_dir_holding_another_checkout() {
     let e = env_prod("nestwt");
     let other = e.wt.join("vendor").join("other");

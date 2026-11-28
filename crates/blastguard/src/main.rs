@@ -426,6 +426,7 @@ fn shape_of_call(input: &HookInput, decision: &Decision) -> Option<harness_core:
             home: home.as_deref(),
             cwd: if cwd.is_empty() { None } else { Some(cwd) },
             tmpdir: tmpdir.as_deref(),
+            session_id: Some(input.session_id.as_str()),
             scope: &scope,
             git_env_redirected: blastguard::shape::git_env_redirected(|k| std::env::var_os(k)),
             git: &git_cache,

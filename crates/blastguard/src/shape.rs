@@ -88,6 +88,17 @@ impl GitLayout {
         if self.is_main() || self.git_dir.parent() != Some(&self.common_dir.join("worktrees")) {
             return None;
         }
+        // The main tree is the parent of `<x>/.git`; a common dir of any other
+        // shape does not say where the main tree is (not determined).
+        if self.common_dir.file_name() != Some(std::ffi::OsStr::new(".git")) {
+            return None;
+        }
+        let main_tree = self.common_dir.parent()?;
+        // A linked root equal to, inside or containing the main tree is the
+        // main tree's own files (a forged back-link), never a linked checkout.
+        if self.toplevel.starts_with(main_tree) || main_tree.starts_with(&self.toplevel) {
+            return None;
+        }
         let Determination::Known(Some(back)) =
             harness_core::boundary::read_to_string(&self.git_dir.join("gitdir"))
         else {
@@ -216,6 +227,9 @@ pub struct Ctx<'a> {
     /// The payload `cwd`.
     pub cwd: Option<&'a str>,
     pub tmpdir: Option<&'a str>,
+    /// The payload `session_id`. Only the scratchpad of THIS session is
+    /// `Scratchpad`; `None` / empty = the own scratchpad cannot be told.
+    pub session_id: Option<&'a str>,
     pub scope: &'a SafeRoots,
     /// The hook process environment redirects git ([`git_env_redirected`]).
     pub git_env_redirected: bool,
@@ -327,6 +341,18 @@ pub fn class_of(targets: &[Target], ctx: &Ctx<'_>) -> TargetClass {
         })
         .max_by_key(|c| rank(*c))
         .unwrap_or(TargetClass::None)
+}
+
+/// `norm` has a `scratchpad` component directly preceded by the payload
+/// session id (non-empty, a single path component).
+fn is_own_scratchpad(norm: &str, session_id: Option<&str>) -> bool {
+    let Some(sid) = session_id.filter(|s| !s.is_empty() && !s.contains('/') && *s != "..") else {
+        return false;
+    };
+    let comps: Vec<&str> = norm.split('/').collect();
+    comps
+        .windows(2)
+        .any(|w| w[0] == sid && w[1] == "scratchpad")
 }
 
 fn has_component(path: &str, name: &str) -> bool {
@@ -479,7 +505,14 @@ fn class_of_path_spelled(raw: &str, ctx: &Ctx<'_>) -> TargetClass {
                 .map(|t| t.trim_end_matches('/'))
                 .is_some_and(|t| !t.is_empty() && norm.starts_with(&format!("{t}/")));
         if scratch_root {
-            return TargetClass::Scratchpad;
+            // Only THIS session's scratchpad: the component right before
+            // `scratchpad` is the payload session id. Another session's
+            // scratchpad, or no session id to compare, is not determined.
+            return if is_own_scratchpad(&norm, ctx.session_id) {
+                TargetClass::Scratchpad
+            } else {
+                TargetClass::Undetermined
+            };
         }
     }
     if crate::deletion::is_system_path(&norm) || crate::scope::is_inside_system_dir(&norm) {

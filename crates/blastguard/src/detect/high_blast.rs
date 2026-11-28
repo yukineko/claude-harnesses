@@ -1,6 +1,6 @@
 use super::{
-    compound_views, git_subcommand_index, has_glob_meta, has_short, is_short_flag,
-    normalized_command, upload_flag_operand, Decision, VerdictAcc,
+    compound_views, first_shell_word, git_subcommand_index, has_glob_meta, has_short,
+    is_short_flag, normalized_command, upload_flag_operand, Decision, VerdictAcc,
 };
 
 /// The CONSERVATIVE "high-blast Ask tier": novel, high-blast-radius /
@@ -139,7 +139,18 @@ fn refspec_source_is_force(tok: &str) -> bool {
     if tok.starts_with('-') {
         return false;
     }
-    let source = tok.split(':').next().unwrap_or(tok);
+    // Judge the value the shell hands to git: `"+x"`, `'+x'` and `\+x` all
+    // arrive as `+x` (backlog 005d3a94). A word whose unquoting cannot be
+    // determined is read raw AND is treated as forcing when it merely
+    // contains a `+` at a possible word start (fail closed).
+    let value = match first_shell_word(tok) {
+        Some(v) => v,
+        None => return tok.contains('+'),
+    };
+    if value.starts_with('-') {
+        return false;
+    }
+    let source = value.split(':').next().unwrap_or(&value);
     source.starts_with('+')
 }
 

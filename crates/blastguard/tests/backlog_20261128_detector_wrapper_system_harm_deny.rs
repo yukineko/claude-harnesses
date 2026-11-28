@@ -114,7 +114,6 @@ fn control_wrapped_harmless_is_allow() {
 }
 
 #[test]
-#[ignore = "RED(d805f80f): pending-id"]
 fn wrapped_system_harm_is_deny() {
     let b = base();
     let bad: Vec<String> = WRAPPERS

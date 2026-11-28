@@ -143,7 +143,6 @@ fn control_plain_push_and_system_harm() {
 }
 
 #[test]
-#[ignore = "RED(005d3a94): pending-id"]
 fn quoted_force_refspec_is_never_weaker_than_unquoted() {
     let b = base();
     let pairs = [

@@ -114,7 +114,11 @@ fn weaker_than_base_destructive_heads_stay_deny_in_main() {
             bad.push(format!("main={d:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "Deny on base, weaker now:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "Deny on base, weaker now:\n{}",
+        bad.join("\n")
+    );
 }
 
 #[test]
@@ -125,12 +129,18 @@ fn measured_fp_common_arithmetic_and_cleanup_traps_stay_allow() {
         format!("P={OK}; declare -i n=0; n+=1; {W}"),
         format!("declare -i n=0; n+=1; P={OK}; {W}"),
         format!("P={OK}; cleanup(){{ rm -f /home/yuki/proj/tmp; }}; trap cleanup EXIT; {W}"),
-        format!("cleanup(){{ rm -f /home/yuki/proj/tmp; }}; trap cleanup EXIT INT TERM; P={OK}; {W}"),
+        format!(
+            "cleanup(){{ rm -f /home/yuki/proj/tmp; }}; trap cleanup EXIT INT TERM; P={OK}; {W}"
+        ),
     ] {
         let d = scoped(&c);
         if !matches!(d, Decision::Allow) {
             bad.push(format!("main={d:?} :: {c:?}"));
         }
     }
-    assert!(bad.is_empty(), "Allow on base, not Allow now:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "Allow on base, not Allow now:\n{}",
+        bad.join("\n")
+    );
 }

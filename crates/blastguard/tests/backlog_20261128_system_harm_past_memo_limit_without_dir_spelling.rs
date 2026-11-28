@@ -65,13 +65,15 @@ fn run_as(command: &str, subagent: bool) -> (String, Duration) {
     )
 }
 
-
 fn check(label: &str, command: &str, bad: &mut Vec<String>) {
     for sub in [false, true] {
         let (d, took) = run_as(command, sub);
         println!("{label} sub={sub} -> {d} in {}ms", took.as_millis());
         if d != "deny" {
-            bad.push(format!("{label} sub={sub} -> {d} in {}ms", took.as_millis()));
+            bad.push(format!(
+                "{label} sub={sub} -> {d} in {}ms",
+                took.as_millis()
+            ));
         }
     }
 }
@@ -102,7 +104,11 @@ fn harm_not_spelling_a_system_dir_after_memo_limit_is_deny() {
     let mut bad = Vec::new();
     let lines: String = (0..3700).map(|i| format!("bash -c 'echo {i}'\n")).collect();
     for (name, t) in tails() {
-        check(&format!("fill3700 + {name}"), &format!("{lines}{t}"), &mut bad);
+        check(
+            &format!("fill3700 + {name}"),
+            &format!("{lines}{t}"),
+            &mut bad,
+        );
     }
     assert!(bad.is_empty(), "not denied:\n{}", bad.join("\n"));
 }

@@ -129,7 +129,7 @@ fn control_plain_delete_in_cwd_is_allow() {
 }
 
 #[test]
-#[ignore = "RED pending"]
+#[ignore = "RED(24fa1aa6): pending"]
 fn symlink_dotdot_protected_config_delete_is_deny() {
     let fx = Fx::new();
     let h = fx.home();

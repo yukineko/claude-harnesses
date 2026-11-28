@@ -28,7 +28,8 @@ fn verdict(cmd: &str, subagent: bool) -> String {
         .stderr(Stdio::piped())
         .env_remove("CLAUDE_CODE_SESSION_ID");
     if !subagent {
-        hook.env("CLAUDECODE", "1").env("CLAUDE_CODE_ENTRYPOINT", "cli");
+        hook.env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_ENTRYPOINT", "cli");
     }
     let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "hook must always exit 0");
@@ -52,10 +53,7 @@ fn rank(v: &str) -> u8 {
     }
 }
 
-const BARE: [&str; 2] = [
-    "git push -f origin main",
-    "git push --force origin main",
-];
+const BARE: [&str; 2] = ["git push -f origin main", "git push --force origin main"];
 const WRAPPERS: [&str; 5] = ["env", "command", "timeout 5", "nice", "sudo"];
 
 #[test]
@@ -75,7 +73,6 @@ fn control_wrapped_plain_push_stays_allow() {
 }
 
 #[test]
-#[ignore = "RED(e21d3035): wrapper before git push -f origin main is weaker than bare form (BACKLOG_ID)"]
 fn wrapped_force_push_is_never_weaker_than_bare() {
     let mut bad = Vec::new();
     for b in BARE {
@@ -92,5 +89,10 @@ fn wrapped_force_push_is_never_weaker_than_bare() {
             }
         }
     }
-    assert!(bad.is_empty(), "{} weaker than bare:\n{}", bad.len(), bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "{} weaker than bare:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }

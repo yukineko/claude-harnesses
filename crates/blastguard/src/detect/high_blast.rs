@@ -47,14 +47,23 @@ pub(super) fn analyze_high_blast_tier(cmd: &str) -> Decision {
         if tokens.is_empty() {
             continue;
         }
-        let head = normalized_command(tokens[0]);
-        let rest = &tokens[1..];
-        let verdict = match head.as_str() {
-            "git" => high_blast_git_force_push(rest),
-            "curl" | "wget" => high_blast_schemeless_upload(&head, rest),
-            _ => None,
-        };
-        if let Some(d) = verdict {
+        // Every candidate command word: a wrapper (`env`/`command`/`timeout 5`/
+        // `nice`/`sudo` ...) puts the real command behind it (backlog e21d3035).
+        let mut verdicts: Vec<Decision> = Vec::new();
+        for idx in super::words::command_candidates(&tokens) {
+            let Some(word) = tokens.get(idx) else {
+                continue;
+            };
+            let head = normalized_command(word);
+            let rest = &tokens[idx + 1..];
+            let v = match head.as_str() {
+                "git" => high_blast_git_force_push(rest),
+                "curl" | "wget" => high_blast_schemeless_upload(&head, rest),
+                _ => None,
+            };
+            verdicts.extend(v);
+        }
+        for d in verdicts {
             if let Some(deny) = acc.record(d) {
                 return deny;
             }

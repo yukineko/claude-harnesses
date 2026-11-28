@@ -202,9 +202,19 @@ fn snapshot(fx: &Fx) -> Vec<(String, Vec<u8>)> {
 
 /// Each case on a FRESH fixture: verdict first, then the real run.
 fn holes(cases: &[(&str, &str)]) {
+    holes_after("", cases);
+}
+
+/// [`holes`] with a fixture `setup` command run for real (cwd = base) before
+/// the verdict; the setup is never judged.
+fn holes_after(setup: &str, cases: &[(&str, &str)]) {
     let mut bad = Vec::new();
     for (cwd_t, cmd_t) in cases {
         let fx = Fx::new();
+        if !setup.is_empty() {
+            let log = real(&fx, &fx.base, &fx.sub(setup));
+            assert!(log.starts_with("status=Some(0)"), "setup `{setup}`: {log}");
+        }
         let cwd = PathBuf::from(fx.sub(cwd_t));
         let cmd = fx.sub(cmd_t);
         let v = verdict(&fx, &cwd, &cmd);
@@ -242,31 +252,26 @@ fn expect_allow(cases: &[(&str, &str)]) {
 // prefix for every verb); verbs in `unmodelled::ORDINARY` are not judged.
 
 #[test]
-#[ignore = "RED(5c848034-r1): git --work-tree=~/.claude mv renames a protected file, allow"]
 fn hole_work_tree_global_git_mv() {
     holes(&[("{R}", "git --work-tree={C} mv settings.json s2.json")]);
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): git --work-tree=~/.claude stash rewrites protected files, allow"]
 fn hole_work_tree_global_git_stash() {
     holes(&[("{R}", "git --work-tree={C} stash -q")]);
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): git --work-tree=~/.claude am creates ~/.claude/hooks/new.sh, allow"]
 fn hole_work_tree_global_git_am() {
     holes(&[("{R}", "git --work-tree={C} am -q {B}/n.mbox")]);
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): git --work-tree=~/.claude read-tree -u rewrites protected files, allow"]
 fn hole_work_tree_global_git_read_tree_u() {
     holes(&[("{R}", "git --work-tree={C} read-tree -u --reset HEAD")]);
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): git --work-tree=~/.claude rm -f deletes a protected file, allow"]
 fn hole_work_tree_global_git_rm_force() {
     holes(&[
         ("{R}", "git --work-tree={C} rm -q -f settings.json"),
@@ -283,7 +288,6 @@ fn hole_work_tree_global_git_rm_force() {
 // destination judgement.
 
 #[test]
-#[ignore = "RED(5c848034-r1): cp/mv/ln to a (partly) quoted ~/.claude destination, allow"]
 fn hole_quoted_copy_destination() {
     holes(&[
         ("{C}", "cp {B}/mf/o.txt \"settings.json\""),
@@ -298,7 +302,6 @@ fn hole_quoted_copy_destination() {
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): tee/install/rsync to a partly quoted ~/.claude/settings.json, allow"]
 fn hole_quoted_writer_destination() {
     holes(&[
         ("{C}", "echo x | tee \"settings\".json"),
@@ -391,13 +394,11 @@ fn control_fixed_shapes_are_not_allow() {
 // ===================================================== FP (RED)
 
 #[test]
-#[ignore = "RED(5c848034-r1): read-only git annotate of the repo's own .claude/settings.json asks (unmodelled verb)"]
 fn fp_annotate_in_repo_protected_file() {
     expect_allow(&[("{W}", "git annotate .claude/settings.json")]);
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): an alias that resolves to `log` asks on a protected pathspec (alias name judged as unmodelled)"]
 fn fp_alias_to_ordinary_log() {
     expect_allow(&[(
         "{W}",
@@ -406,7 +407,6 @@ fn fp_alias_to_ordinary_log() {
 }
 
 #[test]
-#[ignore = "RED(5c848034-r1): git apply --directory=src/repo run in $HOME asks though every path lands below src/repo"]
 fn fp_apply_with_directory_below_home() {
     expect_allow(&[(
         "{H}",
@@ -481,4 +481,47 @@ fn fp_ordinary_development_commands_stay_allow() {
         ("{W}", "mv \"sub/f\" sub/\"g\""),
         ("{W}", "git rm -q \"src/lib.rs\""),
     ]);
+}
+
+// ===================================================== relay bgr-746afbda7c3a
+// Verdict-only `allow` rows from the coordinator's re-run of the probe,
+// checked here with real git. Observed NOT to change ~/.claude (kept out of
+// the REDs): `--work-tree=~/.claude sparse-checkout reapply` (git: "must be in
+// a sparse-checkout"), `-C ~/.claude/hooks worktree add ../w3` without a repo,
+// `notes add -F`, `hash-object -w`, `update-index --cacheinfo`, `rerere
+// forget`, `replay`, `-c alias.st=status st`.
+
+#[test]
+fn hole_push_into_repo_under_claude() {
+    holes_after(
+        "git init -q --bare {K}/r.git",
+        &[("{R}", "git push -q {K}/r.git main")],
+    );
+}
+
+#[test]
+fn hole_push_update_instead_into_claude() {
+    holes_after(
+        "git init -q -b main {C} && git -C {C} config receive.denyCurrentBranch updateInstead",
+        &[
+            ("{R}", "git push -q {C} main"),
+            (
+                "{R}",
+                "git -c receive.denyCurrentBranch=updateInstead push -q {C} main",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn hole_worktree_add_relative_to_c_dir_under_claude() {
+    holes(&[("{R}", "git -C {K} --git-dir={R}/.git worktree add -q ../w3")]);
+}
+
+#[test]
+fn hole_unpack_file_in_claude() {
+    holes(&[(
+        "{C}",
+        "git --git-dir={R}/.git unpack-file HEAD:settings.json",
+    )]);
 }

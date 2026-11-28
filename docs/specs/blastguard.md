@@ -247,6 +247,13 @@ forge・condukt のスケジューラが再利用）。
   `git apply` の実行 dir が `$HOME/.claude` の祖先（`$HOME`・`/`）なら patch 内の名前で到達しうるので Ask
   （`protected_ancestor_landing_ask`）。`rm`/`mv` 等の部分 quote（`"settings".json`・`settings'.json'`）の quote 除去は
   shell word parser（`first_shell_word`）に一本化（旧 `strip_plain_quotes` は全体が 1 対の quote の語のみ）。
+  **round 1（0.2.1056）**: global `--work-tree=W` / `-c core.worktree=W` は、read-only でない全 subcommand
+  （`mv`・`stash`・`am`・`read-tree -u`・`rm -f` 等）で work tree を着地点として判定（`GIT_WORK_TREE` env と同じ扱い。
+  置けない値は skip＝他の arm の判定が残る）。read-only subcommand は `unmodelled::READ_ONLY` に網羅
+  （`annotate` 等は Allow）。alias の解決先が既知 verb なら alias 名自体は未知 verb として判定しない。
+  `git apply --directory=D` は着地点が D なので `$HOME` 実行でも祖先 Ask にしない。`protected_path_block` は
+  quote 除去後の字面も判定（cp/mv/ln/tee/install/rsync の宛先を一本化）。`git push <path>` の宛先 path、
+  未モデル verb の cwd、新規 dir の親が保護 container（`-C ~/.claude/hooks worktree add ../w3`）も着地点として判定。
   **残余**: alias 解決は `fileops/write_targets` の write target 判定のみ（他の git arm は alias 名のまま）。
   **残余**: `checkout-index --prefix=REL` で `--work-tree` 無しのとき cwd 起点で判定する（git は work tree top 起点なので
   cwd が work tree の subdir の場合は未検証）。generic の `--output` 走査と `archive -o` は未知 option を読み飛ばす

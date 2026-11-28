@@ -99,8 +99,18 @@ cannot tell which files it writes and refuses to guess",
         let action = "git apply";
         if let Some(d) = super::super::protected::protected_landing_block(ctx, action, b)
             .or_else(|| super::super::protected::protected_path_block(ctx, action, b))
-            .or_else(|| super::super::protected::protected_ancestor_landing_ask(ctx, action, b))
         {
+            return d;
+        }
+    }
+    // `--directory=D` roots EVERY path the patch names below D (git refuses
+    // `..` and absolute names without `--unsafe-paths`, asked about below), so
+    // the landing is D and the directory git runs in is not what is judged for
+    // an ancestor of ~/.claude. Without it, the patch text names the paths.
+    if parsed.hits_of("directory").next().is_none() {
+        if let Some(d) = base.as_deref().and_then(|b| {
+            super::super::protected::protected_ancestor_landing_ask(ctx, "git apply", b)
+        }) {
             return d;
         }
     }
@@ -124,6 +134,7 @@ tell whether the patch lands on a protected path and refuses to guess",
         let action = "git apply --directory";
         if let Some(d) = super::super::protected::protected_landing_block(ctx, action, &abs)
             .or_else(|| super::super::protected::protected_path_block(ctx, action, &abs))
+            .or_else(|| super::super::protected::protected_ancestor_landing_ask(ctx, action, &abs))
         {
             return d;
         }

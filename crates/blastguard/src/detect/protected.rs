@@ -76,6 +76,9 @@ pub(super) fn protected_path_block_at(
     if let Some(d) = protected_path_lexical_block(ctx, action, path) {
         return Some(d);
     }
+    let physical = unquoted_operand(physical).unwrap_or_else(|| physical.to_string());
+    let path = unquoted_operand(path).unwrap_or_else(|| path.to_string());
+    let (physical, path) = (physical.as_str(), path.as_str());
     match physical_landing(physical, ctx.raw_base.as_deref())? {
         Determination::Known(real) => protected_verdict(
             ctx,
@@ -100,7 +103,13 @@ pub(super) fn protected_path_lexical_block(
     action: &str,
     path: &str,
 ) -> Option<Decision> {
-    protected_verdict(ctx, action, path, path)
+    // The shell removes the quotes before the command sees the path, so the
+    // unquoted spelling is judged too (`"settings".json`, `{C}/"hooks"/x`;
+    // backlog 5c848034). One place, so every destination / target caller
+    // (cp, mv, ln, tee, install, rsync, git write targets, …) agrees.
+    protected_verdict(ctx, action, path, path).or_else(|| {
+        unquoted_operand(path).and_then(|plain| protected_verdict(ctx, action, &plain, &plain))
+    })
 }
 
 /// The shared verdict: `judged` is the path tested against the workflow and

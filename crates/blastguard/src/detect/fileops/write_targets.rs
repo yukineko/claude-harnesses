@@ -51,7 +51,7 @@ mod unmodelled;
 use harness_core::verdict::Determination;
 
 use super::super::git::argv::{parse, Opt, Parsed, Spec};
-use super::super::git::git_moved_dir;
+use super::super::git::{git_global_config_assignments, git_moved_dir};
 use super::super::protected::{
     physical_landing, protected_glob_deny, protected_landing_block, protected_path_block,
     protected_path_lexical_block, system_landing_block, system_path_block,
@@ -145,6 +145,17 @@ fn git_env(words: &[&str]) -> GitEnv {
 /// Subcommands without a table: only `--output` is looked for.
 const GENERIC: &[Opt] = &[Opt::val("output", None)];
 const ARCHIVE: &[Opt] = &[Opt::val("output", Some('o'))];
+/// `git push`: only the options whose value is the NEXT word matter, so the
+/// remote is read as the first operand.
+const PUSH: &[Opt] = &[
+    Opt::val("repo", None),
+    Opt::val("receive-pack", None),
+    Opt::val("exec", None),
+    Opt::val("push-option", Some('o')),
+    Opt::inline("recurse-submodules"),
+    Opt::inline("force-with-lease"),
+    Opt::inline("signed"),
+];
 
 const INIT: &[Opt] = &[
     Opt::flag("quiet", Some('q')),
@@ -463,6 +474,7 @@ fn git_write_targets(
     explicit_work_tree: bool,
     sub: &str,
     args: &[&str],
+    judge_unmodelled: bool,
 ) -> Vec<Target> {
     let mut out = Vec::new();
     // An env prefix repoints git's repository / work tree. `init` creates the
@@ -493,6 +505,39 @@ fn git_write_targets(
             base: Base::Cwd,
             mode: Mode::Soft,
         });
+    }
+    // The global twins of the env prefix (`--work-tree=W`, `-c core.worktree=W`)
+    // move the tree every subcommand that is not read-only may write
+    // (`mv`, `stash`, `am`, `read-tree -u`, `rm -f`, …): the work tree is judged
+    // as a landing, exactly as `GIT_WORK_TREE` is. `checkout-index` has its own
+    // arm below.
+    if sub != "checkout-index" && !unmodelled::is_read_only(sub) {
+        if globals
+            .iter()
+            .any(|g| *g == "--work-tree" || g.starts_with("--work-tree="))
+        {
+            out.push(Target {
+                action: "git --work-tree".to_string(),
+                value: Some(".".to_string()),
+                kind: Kind::Dir,
+                base: Base::WorkTree,
+                mode: Mode::Soft,
+            });
+        }
+        for a in git_global_config_assignments(globals) {
+            let a = first_shell_word(a).unwrap_or_else(|| a.to_string());
+            if let Some((key, value)) = a.split_once('=') {
+                if key.eq_ignore_ascii_case("core.worktree") {
+                    out.push(Target {
+                        action: "git -c core.worktree".to_string(),
+                        value: Some(value.to_string()),
+                        kind: Kind::Dir,
+                        base: Base::Cwd,
+                        mode: Mode::Soft,
+                    });
+                }
+            }
+        }
     }
     match sub {
         "bundle" => {
@@ -645,6 +690,37 @@ fn git_write_targets(
             }
             add_guesses(&mut out, "git clone", &p, args, Kind::Dir);
         }
+        "push" => {
+            // A push to a LOCAL repository writes its object store, refs and (with
+            // `receive.denyCurrentBranch=updateInstead`) its work tree. A remote
+            // NAME (`origin`) is not a path; a value spelled as one is judged as a
+            // landing, only when it can be placed.
+            let p = parse(
+                args,
+                &Spec {
+                    tables: &[PUSH],
+                    lenient: true,
+                    digits: false,
+                },
+            );
+            let remote = p
+                .hits_of("repo")
+                .next()
+                .and_then(|h| h.value)
+                .or_else(|| p.operands.first().copied());
+            if let Some(r) = remote {
+                let r = r.strip_prefix("file://").unwrap_or(r);
+                if !r.contains("://") && (r.contains('/') || r.starts_with(['.', '~'])) {
+                    out.push(Target {
+                        action: "git push".to_string(),
+                        value: Some(r.to_string()),
+                        kind: Kind::Dir,
+                        base: Base::Cwd,
+                        mode: Mode::Soft,
+                    });
+                }
+            }
+        }
         "format-patch" => {
             let p = read(args, FORMAT_PATCH, true);
             for h in p.hits_of("output-directory") {
@@ -682,7 +758,16 @@ fn git_write_targets(
             }
             // A verb the table has no row for: every word that could be a
             // path is judged (an Ask on a protected / system landing).
-            if !unmodelled::is_ordinary(sub) {
+            if judge_unmodelled && !unmodelled::is_ordinary(sub) {
+                // Helpers drop scratch files in the cwd (`unpack-file` writes
+                // `.merge_file_*` there), so the cwd is a landing too.
+                out.push(Target {
+                    action: format!("git {sub} (unmodelled subcommand, cwd)"),
+                    value: Some(".".to_string()),
+                    kind: Kind::Dir,
+                    base: Base::Cwd,
+                    mode: Mode::Guess,
+                });
                 for w in guess_words(args) {
                     out.push(Target {
                         action: format!("git {sub} (unmodelled subcommand)"),
@@ -732,6 +817,14 @@ fn dir_block(ctx: &Ctx<'_>, action: &str, dir: &str) -> Option<Decision> {
         if let Some(d) = protected_landing_block(ctx, action, &real) {
             return Some(d);
         }
+        // A NEW directory created directly inside a directory that holds
+        // protected paths (`git worktree add ../w3` from `-C ~/.claude/hooks`
+        // creates `~/.claude/w3`) populates that protected container.
+        if let Some((parent, _)) = real.trim_end_matches('/').rsplit_once('/') {
+            if let Some(d) = protected_landing_block(ctx, action, parent) {
+                return Some(d);
+            }
+        }
     }
     None
 }
@@ -762,10 +855,22 @@ pub(in crate::detect) fn git_write_target_verdict(
         .iter()
         .any(|g| *g == "--work-tree" || g.starts_with("--work-tree="));
     let explicit_work_tree = global_work_tree || env.work_tree.is_some();
-    let mut targets = git_write_targets(globals, &env, explicit_work_tree, sub, args);
     // `-c alias.X=VERB …`: the alias hides the verb, so the verb it stands for
-    // is judged too (the alias name itself stays judged as an unmodelled verb).
-    if let Some((verb, verb_args)) = unmodelled::resolve_alias(globals, sub, args) {
+    // is judged too. The alias NAME is judged as an unmodelled verb only when
+    // what it stands for is not itself a known verb (an alias to `log` is `log`).
+    let alias = unmodelled::resolve_alias(globals, sub, args);
+    let name_is_unknown_verb = alias
+        .as_ref()
+        .is_none_or(|(verb, _)| !unmodelled::is_ordinary(verb));
+    let mut targets = git_write_targets(
+        globals,
+        &env,
+        explicit_work_tree,
+        sub,
+        args,
+        name_is_unknown_verb,
+    );
+    if let Some((verb, verb_args)) = alias {
         let verb_args: Vec<&str> = verb_args.iter().map(String::as_str).collect();
         targets.extend(git_write_targets(
             globals,
@@ -773,6 +878,7 @@ pub(in crate::detect) fn git_write_target_verdict(
             explicit_work_tree,
             &verb,
             &verb_args,
+            true,
         ));
     }
     if targets.is_empty() {

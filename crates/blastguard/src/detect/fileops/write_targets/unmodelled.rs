@@ -114,10 +114,69 @@ const MODELLED: &[&str] = &[
     "apply",
 ];
 
-/// True when `sub` is everyday repository porcelain or has its own arm; false
-/// when its path operands must be judged as possible write targets.
+/// Subcommands that only READ: they write neither the work tree nor a named
+/// path (a `--output` option is read by the generic scan, not here). Every
+/// read-only subcommand belongs here, so reading a protected file in the
+/// repository's own work tree is never an Ask (`git annotate .claude/…`).
+const READ_ONLY: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "blame",
+    "annotate",
+    "grep",
+    "ls-files",
+    "ls-tree",
+    "rev-parse",
+    "rev-list",
+    "describe",
+    "cat-file",
+    "diff-tree",
+    "diff-index",
+    "diff-files",
+    "show-ref",
+    "shortlog",
+    "reflog",
+    "fsck",
+    "count-objects",
+    "name-rev",
+    "merge-base",
+    "merge-tree",
+    "for-each-ref",
+    "ls-remote",
+    "check-ignore",
+    "check-attr",
+    "check-mailmap",
+    "check-ref-format",
+    "whatchanged",
+    "show-branch",
+    "cherry",
+    "range-diff",
+    "patch-id",
+    "show-index",
+    "stripspace",
+    "fmt-merge-msg",
+    "column",
+    "var",
+    "version",
+    "help",
+    "verify-commit",
+    "verify-tag",
+    "verify-pack",
+    "get-tar-commit-id",
+    "request-pull",
+];
+
+/// True when `sub` only reads (see [`READ_ONLY`]).
+pub(super) fn is_read_only(sub: &str) -> bool {
+    READ_ONLY.contains(&sub)
+}
+
+/// True when `sub` is everyday repository porcelain, read-only, or has its own
+/// arm; false when its path operands must be judged as possible write targets.
 pub(super) fn is_ordinary(sub: &str) -> bool {
-    ORDINARY.contains(&sub) || MODELLED.contains(&sub)
+    ORDINARY.contains(&sub) || READ_ONLY.contains(&sub) || MODELLED.contains(&sub)
 }
 
 /// Longest alias chain followed (git itself stops at a loop).

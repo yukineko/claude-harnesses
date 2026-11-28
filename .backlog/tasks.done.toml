@@ -98639,3 +98639,191 @@ rev = "1fd1f0082ea3ed8de157368507b6da381bb84475"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "24fa1aa6"
+title = "blastguard: rm through <symlink>/.. reaches ~/.claude/settings.json but is Allow (rm -f) / Ask (rm -rf); direct spelling is Deny (lexical .. collapse)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795833934
+updated_at = 1795834626
+weight = 0.0
+issue_number = 2014
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2014"
+issue_closed_at = 1795834629
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config -- --ignored"
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+observed_at = 1795833934
+detail = """
+exit 101: es/red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.49s
+     Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-3e19a779c1c810c2)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_symlink_dotdot_protected_config"
+exit = 0
+passed = 3
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834625
+output_digest = "sha256:3b8133b2f1186a168959c9e51ee2ddbd3dd129ee9f8d37e37d103ffb4d906253"
+excerpt = """
+
+running 3 tests
+test control_direct_protected_config_delete_is_deny ... ok
+test control_plain_delete_in_cwd_is_allow ... ok
+test symlink_dotdot_protected_config_delete_is_deny ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/backlog_20261128_detector_symlink_dotdot_protected_config.rs (target/debug/deps/backlog_20261128_detector_symlink_dotdot_protected_config-17f6a8664a1ee194)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "66e7a741"
+title = "blastguard: brace expansion hides destructive git flags — git reset {--hard,HEAD} / git checkout {--,.} Allow (expanded Deny); git clean {-f,-x} / git push {--force,origin} main / git branch {-D,foo} Allow (expanded Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795833978
+updated_at = 1795834630
+weight = 0.0
+issue_number = 2015
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2015"
+issue_closed_at = 1795834633
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag -- --ignored"
+rev = "f76ae4147516af18ad26179d6ce533740a80e388"
+observed_at = 1795833978
+detail = """
+exit 101: red-detector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.85s
+     Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-9a67102d66b409e5)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_expansion_destructive_flag"
+exit = 0
+passed = 4
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834629
+output_digest = "sha256:cfc2f4eb676cd9eba22e969fb71b5c9777b4c3da7b16fae6f02a256024870321"
+excerpt = """
+
+running 4 tests
+test control_expansions_are_what_bash_runs ... ok
+test control_harmless_braces_are_allow ... ok
+test braced_destructive_git_flag_matches_expanded_verdict ... ok
+test control_expanded_spelling_keeps_its_verdict ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_detector_brace_expansion_destructive_flag.rs (target/debug/deps/backlog_20261128_detector_brace_expansion_destructive_flag-82dda1b9f4e0f95a)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "46145358"
+title = "blastguard: system harm via command-position brace — {rm,-rf} /etc and {rm,-rf,/etc} are Ask, expanded rm -rf /etc is Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1795834020
+updated_at = 1795834634
+weight = 0.0
+issue_number = 2016
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/2016"
+issue_closed_at = 1795834636
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_command_position_system_harm -- --ignored"
+rev = "fd98a55f5dbf54bdfe1bf3c5ee64b76df632c7ce"
+observed_at = 1795834020
+detail = """
+exit 101: tector-r6/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.83s
+     Running tests/backlog_20261128_detector_brace_command_position_system_harm.rs (target/debug/deps/backlog_20261128_detector_brace_command_position_system_harm-0c924be79dce96a0)
+error: test failed, to rerun pass `-p blastguard --test backlog_20261128_detector_brace_command_position_system_harm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_20261128_detector_brace_command_position_system_harm"
+exit = 0
+passed = 4
+rev = "da0a388105c9901fd365859b10c0e030189c4a03"
+observed_at = 1795834633
+output_digest = "sha256:8238883ee39eb9f3ae39007511f4d28f8bef4f50d5aa3ab3b8cb9afe1d2d7859"
+excerpt = """
+
+running 4 tests
+test control_braced_forms_expand_to_rm_rf_etc ... ok
+test control_harmless_command_position_brace_is_not_deny ... ok
+test command_position_brace_system_harm_is_deny ... ok
+test control_spelled_and_argument_braces_are_deny ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_20261128_detector_brace_command_position_system_harm.rs (target/debug/deps/backlog_20261128_detector_brace_command_position_system_harm-a6eb6b963a11e03c)
+"""
+
+[task.closure.red]
+rev = "97ef89e267e5fbc4537ef7e192a02fdc705ba6cc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

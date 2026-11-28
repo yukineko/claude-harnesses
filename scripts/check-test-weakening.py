@@ -207,7 +207,7 @@ from weakening_vcs import (  # noqa: E402
     index_content,
     index_or_none,
 )
-from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
+from weakening_macro_unignore import template_or_unignore_edit_is_safe  # noqa: E402
 import weakening_macro as _wm  # noqa: E402  (tokenisers for the re-anchor shape)
 from weakening_macro_fnbody import fn_body_edit_is_safe  # noqa: E402
 
@@ -1834,7 +1834,7 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 )
                 and not (
                     whole
-                    and template_invocation_edit_is_safe(
+                    and template_or_unignore_edit_is_safe(
                         before_src, after_src,
                         _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
                         TEST_ATTR_RE,
@@ -1884,6 +1884,7 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # attribute added/removed, no line moved between items and no
                 # assert-family macro lost from an edited fn
                 # (`fn_body_edit_is_safe`, weakening_macro_fnbody.py).
+                # (+ leading-#[ignore] removal from forwarder invocations, weakening_macro_unignore.py)
                 # One unsafe shape IS computed (backlog 74810d3e): invocations
                 # re-anchored to another template (`template_reanchor_detail`)
                 # -> an `assertion-removed` finding, blocking unless acknowledged.
